@@ -66,7 +66,7 @@ func (e *Engine) GetContainers(vmName string) ([]ContainerInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	return e.Webhook.ListContainers(vm, "/podman")
+	return e.Webhook.ListContainers(vm, "/hooks/podman")
 }
 
 // Provision выдаёт домен контейнеру: пишет маршрут в Caddy и запись в state.

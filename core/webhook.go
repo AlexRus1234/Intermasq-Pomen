@@ -29,14 +29,15 @@ type rawPodmanContainer struct {
 }
 
 // ListContainers стучится на вебхук ВМ и возвращает нормализованный список.
-// endpoint — путь на вебхуке (например "/podman").
+// endpoint — путь на вебхуке (по умолчанию /hooks/podman — стандартный mount adnanh/webhook).
 func (w *WebhookClient) ListContainers(vm VMConfig, endpoint string) ([]ContainerInfo, error) {
 	if endpoint == "" {
-		endpoint = "/podman"
+		endpoint = "/hooks/podman"
 	}
 	url := strings.TrimRight(vm.WebhookURL, "/") + endpoint
 
-	req, err := http.NewRequest("GET", url, nil)
+	// adnanh/webhook по умолчанию ожидает POST. GET может вернуть 404/405.
+	req, err := http.NewRequest("POST", url, nil)
 	if err != nil {
 		return nil, err
 	}
