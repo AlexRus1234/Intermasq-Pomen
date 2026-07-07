@@ -1,5 +1,5 @@
 {
-    "base_domain": ".server.internal",
+    "base_domain": ".internal",
 
     "nodes": {
         "yadr00": {

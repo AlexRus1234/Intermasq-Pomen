@@ -85,12 +85,20 @@ func (e *Engine) Provision(c ContainerInfo) (string, error) {
 	vmName := strings.ToLower(c.VMName)
 	nodeKey := strings.ToLower(c.Node)
 
-	domain := fmt.Sprintf("%s.%s%s", name, vmName, e.Domain)
+	domain := fmt.Sprintf("%s.%s.%s%s", name, vmName, nodeKey, e.Domain)
 	routeID := fmt.Sprintf("pod-%s-%s-%s", vmName, name, nodeKey)
 	tlsID := fmt.Sprintf("podtls-%s-%s-%s", vmName, name, nodeKey)
 
-	if err := e.Caddy.AddRoute(nodeKey, domain, c.VMIP, c.Port, c.Protocol, routeID, tlsID); err != nil {
+	// Используем ReplayRoute (upsertByID) вместо AddRoute (чистый POST),
+	// чтобы повторный Provision того же домена не создавал дубль TLS-политики
+	// в Caddy ("cannot apply more than one automation policy to host").
+	if err := e.Caddy.ReplayRoute(nodeKey, domain, c.VMIP, c.Port, c.Protocol, routeID, tlsID); err != nil {
 		return "", fmt.Errorf("Caddy ошибка: %w", err)
+	}
+
+	// The Nuke: жесткий рестарт Caddy для применения сертификата (как AddRoute в Povez).
+	if err := e.Caddy.RestartCaddy(nodeKey); err != nil {
+		return "", fmt.Errorf("Caddy restart: %w", err)
 	}
 
 	if e.State != nil {
