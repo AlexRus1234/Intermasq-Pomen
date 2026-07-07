@@ -1,10 +1,12 @@
 package core
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -20,12 +22,18 @@ func NewWebhookClient() *WebhookClient {
 }
 
 // rawPodmanContainer — селективный подмножество полей `podman ps --format json`.
-// Реальный JSON богаче, но нам нужны только Names, Status и Labels.
 type rawPodmanContainer struct {
 	Names  []string          `json:"Names"`
 	Status string            `json:"Status"`
 	State  string            `json:"State"`
 	Labels map[string]string `json:"Labels"`
+	Ports  []rawPort         `json:"Ports"`
+}
+
+type rawPort struct {
+	HostPort      int    `json:"host_port"`
+	ContainerPort int    `json:"container_port"`
+	Protocol      string `json:"protocol"`
 }
 
 // ListContainers стучится на вебхук ВМ и возвращает нормализованный список.
@@ -36,11 +44,13 @@ func (w *WebhookClient) ListContainers(vm VMConfig, endpoint string) ([]Containe
 	}
 	url := strings.TrimRight(vm.WebhookURL, "/") + endpoint
 
-	// adnanh/webhook по умолчанию ожидает POST. GET может вернуть 404/405.
-	req, err := http.NewRequest("POST", url, nil)
+	// adnanh/webhook требует Content-Type: application/json и непустой body,
+	// иначе падает с "unsupported content type" до проверки trigger-rule.
+	req, err := http.NewRequest("POST", url, bytes.NewBufferString("{}"))
 	if err != nil {
 		return nil, err
 	}
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-VM-Secret", vm.Secret)
 
 	resp, err := w.client.Do(req)
@@ -66,7 +76,7 @@ func (w *WebhookClient) ListContainers(vm VMConfig, endpoint string) ([]Containe
 			realName = c.Names[0]
 		}
 
-		running := strings.EqualFold(c.State, "running") || strings.EqualFold(c.Status, "running") ||
+		running := strings.EqualFold(c.State, "running") ||
 			strings.HasPrefix(strings.ToLower(c.Status), "up")
 
 		info := ContainerInfo{
@@ -79,6 +89,29 @@ func (w *WebhookClient) ListContainers(vm VMConfig, endpoint string) ([]Containe
 			Node:     vm.Node,
 		}
 
+		// Порт: приоритет у label port-XXXX, иначе первый host_port из Ports.
+		if c.Ports != nil {
+			for _, p := range c.Ports {
+				if p.HostPort > 0 {
+					info.Port = strconv.Itoa(p.HostPort)
+					if p.Protocol != "" {
+						info.Protocol = p.Protocol
+					}
+					break
+				}
+			}
+		}
+
+		// Имя: по умолчанию реальное имя без префикса systemd-.
+		info.Name = strings.TrimPrefix(realName, "systemd-")
+		// Срезаем ведущий нумерационный префикс вида "01-athens" -> "athens".
+		if parts := strings.SplitN(info.Name, "-", 2); len(parts) == 2 {
+			if _, err := strconv.Atoi(parts[0]); err == nil {
+				info.Name = parts[1]
+			}
+		}
+
+		// Labels переопределяют.
 		if c.Labels != nil {
 			for k, v := range c.Labels {
 				lk := strings.ToLower(strings.TrimSpace(k))
@@ -98,10 +131,6 @@ func (w *WebhookClient) ListContainers(vm VMConfig, endpoint string) ([]Containe
 					info.Name = lv
 				}
 			}
-		}
-
-		if info.Name == "" {
-			info.Name = realName
 		}
 
 		result = append(result, info)
