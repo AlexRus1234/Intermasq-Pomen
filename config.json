@@ -1,0 +1,12 @@
+{
+    "base_domain": ".server.internal",
+
+    "nodes": {
+        "yadr00": {
+            "caddy_url": "http://172.20.5.3:2019"
+        },
+        "yadr01": {
+            "caddy_url": "http://172.20.6.3:2019"
+        }
+    }
+}

@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="ru" data-bs-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pomen</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+</head>
+<body class="bg-body-tertiary">
+    <div id="app" class="container-fluid px-4 mt-4">
+        <h2 class="fw-bold text-primary mb-4">🏷️ Pomen — выдача доменов контейнерам Podman</h2>
+
+        <ul class="nav nav-tabs mb-4">
+            <li class="nav-item">
+                <button class="nav-link" :class="{ active: tab === 'vms' }" @click="tab = 'vms'; loadVMs()">🖥️ Виртуальные машины</button>
+            </li>
+            <li class="nav-item">
+                <button class="nav-link" :class="{ active: tab === 'containers' }" @click="tab = 'containers'">📦 Контейнеры</button>
+            </li>
+            <li class="nav-item">
+                <button class="nav-link" :class="{ active: tab === 'routes' }" @click="tab = 'routes'; loadState()">🛣️ Маршруты</button>
+            </li>
+        </ul>
+
+        <!-- Вкладка: ВМ -->
+        <div v-show="tab === 'vms'">
+            <div class="card shadow-sm mb-4">
+                <div class="card-header bg-primary text-white fw-bold d-flex justify-content-between align-items-center">
+                    <span>Реестр ВМ</span>
+                    <button @click="loadVMs" class="btn btn-sm btn-light">🔄 Обновить</button>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-hover mb-0">
+                            <thead><tr><th>Имя</th><th>Нода</th><th>IP</th><th>Webhook URL</th><th>Действие</th></tr></thead>
+                            <tbody>
+                                <tr v-for="vm in vms" :key="vm.name">
+                                    <td class="font-monospace">{{ vm.name }}</td>
+                                    <td>{{ vm.node }}</td>
+                                    <td class="font-monospace">{{ vm.ip }}</td>
+                                    <td class="font-monospace small">{{ vm.webhook_url }}</td>
+                                    <td>
+                                        <button @click="deleteVM(vm.name)" class="btn btn-sm btn-outline-danger">🗑️ Удалить</button>
+                                    </td>
+                                </tr>
+                                <tr v-if="vms.length === 0"><td colspan="5" class="text-center p-4 text-muted">Нет зарегистрированных ВМ.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card shadow-sm border-success">
+                <div class="card-header bg-success text-white fw-bold">Добавить ВМ</div>
+                <div class="card-body">
+                    <div class="row g-2">
+                        <div class="col-md-3">
+                            <input v-model="newVM.name" class="form-control" placeholder="Имя (уникальное)">
+                        </div>
+                        <div class="col-md-2">
+                            <select v-model="newVM.node" class="form-select">
+                                <option value="">Нода...</option>
+                                <option v-for="n in nodeNames" :key="n">{{ n }}</option>
+                            </select>
+                        </div>
+                        <div class="col-md-2">
+                            <input v-model="newVM.ip" class="form-control font-monospace" placeholder="IP ВМ">
+                        </div>
+                        <div class="col-md-3">
+                            <input v-model="newVM.webhook_url" class="form-control font-monospace" placeholder="http://VM:PORT">
+                        </div>
+                        <div class="col-md-2">
+                            <input v-model="newVM.secret" class="form-control" placeholder="Секрет" type="password">
+                        </div>
+                    </div>
+                    <div class="mt-2">
+                        <button @click="addVM" class="btn btn-success fw-bold" :disabled="!canAddVM">➕ Добавить</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Вкладка: Контейнеры -->
+        <div v-show="tab === 'containers'">
+            <div class="card shadow-sm mb-4">
+                <div class="card-header bg-warning text-dark fw-bold d-flex justify-content-between align-items-center">
+                    <span>Контейнеры Podman</span>
+                    <div class="d-flex gap-2">
+                        <select v-model="selectedVM" class="form-select form-select-sm" style="width:auto">
+                            <option value="">Выберите ВМ...</option>
+                            <option v-for="vm in vms" :key="vm.name">{{ vm.name }}</option>
+                        </select>
+                        <button @click="loadContainers" class="btn btn-sm btn-dark" :disabled="!selectedVM">🔄 Обновить</button>
+                    </div>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-hover mb-0">
+                            <thead><tr><th>Статус</th><th>Имя</th><th>Реальное имя</th><th>Порт</th><th>Proto</th><th>Действие</th></tr></thead>
+                            <tbody>
+                                <tr v-for="c in containers" :key="c.real_name">
+                                    <td>{{ c.running ? '🟢' : '⚫' }}</td>
+                                    <td class="font-monospace">{{ c.name }}</td>
+                                    <td class="font-monospace small text-muted">{{ c.real_name }}</td>
+                                    <td>{{ c.port || '—' }}</td>
+                                    <td><span class="badge bg-secondary">{{ c.protocol }}</span></td>
+                                    <td>
+                                        <button @click="provision(c)" class="btn btn-sm btn-success fw-bold"
+                                                :disabled="!c.port || provisioning === c.real_name">
+                                            {{ provisioning === c.real_name ? '...' : '🏷️ Выдать домен' }}
+                                        </button>
+                                    </td>
+                                </tr>
+                                <tr v-if="containers.length === 0">
+                                    <td colspan="6" class="text-center p-4 text-muted">
+                                        {{ selectedVM ? 'Нажмите «Обновить»' : 'Выберите ВМ' }}
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            <p class="text-muted small">
+                Домен выдаётся по схеме <code>{{ domainExample }}</code>.
+                Параметры берутся из labels контейнера: <code>name-…</code>, <code>port-…</code>, <code>proto-…</code>.
+            </p>
+        </div>
+
+        <!-- Вкладка: Маршруты -->
+        <div v-show="tab === 'routes'">
+            <div class="card shadow-sm mb-3">
+                <div class="card-header bg-info text-dark fw-bold d-flex justify-content-between align-items-center">
+                    <span>Таблица маршрутов Caddy (routes.json)</span>
+                    <div>
+                        <button @click="loadState" class="btn btn-sm btn-dark me-1">🔃 Обновить</button>
+                        <button @click="replayCaddy" class="btn btn-sm btn-success fw-bold" :disabled="replaying">
+                            {{ replaying ? 'Восстановление...' : '🔄 Replay' }}
+                        </button>
+                    </div>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-hover table-sm mb-0">
+                            <thead>
+                                <tr><th>Domain</th><th>VM</th><th>IP</th><th>Port</th><th>Proto</th><th>Node</th><th>Updated</th><th></th></tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="rec in state" :key="rec.route_id">
+                                    <td class="font-monospace">{{ rec.domain }}</td>
+                                    <td>{{ rec.vm_name }}</td>
+                                    <td class="font-monospace">{{ rec.target_ip }}</td>
+                                    <td>{{ rec.target_port }}</td>
+                                    <td><span class="badge bg-secondary">{{ rec.protocol }}</span></td>
+                                    <td>{{ rec.node }}</td>
+                                    <td class="small text-muted">{{ rec.updated_at }}</td>
+                                    <td>
+                                        <button @click="deprovision(rec.route_id)" class="btn btn-sm btn-outline-danger">🗑️</button>
+                                    </td>
+                                </tr>
+                                <tr v-if="state.length === 0">
+                                    <td colspan="8" class="text-center p-4 text-muted">Нет выданных доменов.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            <p class="text-muted small">
+                <b>Replay</b> — перезаписать конфиг Caddy из файла таблицы (использовать после жёсткого сброса Caddy).
+                Удаление — ручная очистка offline-записей.
+            </p>
+        </div>
+    </div>
+
+    <script>
+        const { createApp, ref, computed, onMounted } = Vue
+
+        const api = axios.create({
+            baseURL: window.location.pathname.replace(/\/+$/, '')
+        })
+
+        createApp({
+            setup() {
+                const tab = ref('vms')
+                const vms = ref([])
+                const state = ref([])
+                const containers = ref([])
+                const selectedVM = ref('')
+                const provisioning = ref('')
+                const replaying = ref(false)
+                const nodeNames = ref([])
+                const newVM = ref({ name: '', node: '', ip: '', webhook_url: '', secret: '' })
+
+                const canAddVM = computed(() =>
+                    newVM.value.name && newVM.value.node && newVM.value.ip && newVM.value.webhook_url
+                )
+                const domainExample = computed(() =>
+                    `<name>.${selectedVM.value || '<vm>'}.server.internal`
+                )
+
+                async function loadVMs() {
+                    try {
+                        const res = await api.get('/api/vms')
+                        vms.value = res.data || []
+                    } catch(e) { alert(e.response?.data?.error || "Ошибка") }
+                }
+
+                async function addVM() {
+                    try {
+                        await api.post('/api/vms', newVM.value)
+                        newVM.value = { name: '', node: '', ip: '', webhook_url: '', secret: '' }
+                        await loadVMs()
+                    } catch(e) { alert(e.response?.data?.error || "Ошибка") }
+                }
+
+                async function deleteVM(name) {
+                    if (!confirm(`Удалить ВМ «${name}» из реестра? Маршруты останутся (offline).`)) return
+                    try {
+                        await api.delete('/api/vms/' + encodeURIComponent(name))
+                        await loadVMs()
+                    } catch(e) { alert(e.response?.data?.error || "Ошибка") }
+                }
+
+                async function loadContainers() {
+                    if (!selectedVM.value) return
+                    try {
+                        const res = await api.get('/api/containers', { params: { vm: selectedVM.value } })
+                        containers.value = res.data || []
+                    } catch(e) { alert(e.response?.data?.error || "Ошибка") }
+                }
+
+                async function provision(c) {
+                    provisioning.value = c.real_name
+                    try {
+                        const res = await api.post('/api/provision', {
+                            vm: selectedVM.value,
+                            container_name: c.name || c.real_name
+                        })
+                        alert(res.data.message)
+                    } catch(e) { alert(e.response?.data?.error || "Ошибка") }
+                    finally { provisioning.value = '' }
+                }
+
+                async function loadState() {
+                    try {
+                        const res = await api.get('/api/state')
+                        state.value = res.data || []
+                    } catch(e) { alert(e.response?.data?.error || "Ошибка") }
+                }
+
+                async function deprovision(routeID) {
+                    if (!confirm(`Удалить маршрут ${routeID}?`)) return
+                    try {
+                        await api.delete('/api/deprovision/' + encodeURIComponent(routeID))
+                        await loadState()
+                    } catch(e) { alert(e.response?.data?.error || "Ошибка") }
+                }
+
+                async function replayCaddy() {
+                    if (!confirm("Перезаписать конфиг Caddy из таблицы? Перезапустит Caddy на затронутых нодах.")) return
+                    replaying.value = true
+                    try {
+                        const res = await api.post('/api/replay')
+                        const d = res.data
+                        let msg = `Восстановлено: ${d.ok}`
+                        if (d.errors && d.errors.length) {
+                            msg += `\nОшибки (${d.errors.length}):\n` + d.errors.join('\n')
+                        }
+                        alert(msg)
+                    } catch(e) { alert(e.response?.data?.error || "Ошибка") }
+                    finally { replaying.value = false }
+                }
+
+                async function loadNodes() {
+                    try {
+                        const res = await fetch('config.json')
+                        const cfg = await res.json()
+                        nodeNames.value = Object.keys(cfg.nodes || {})
+                    } catch(e) { console.error('config.json недоступен', e) }
+                }
+
+                onMounted(() => {
+                    loadVMs()
+                    loadState()
+                    loadNodes()
+                })
+
+                return {
+                    tab, vms, state, containers, selectedVM, provisioning, replaying,
+                    nodeNames, newVM, canAddVM, domainExample,
+                    loadVMs, addVM, deleteVM, loadContainers, provision, loadState, deprovision, replayCaddy
+                }
+            }
+        }).mount('#app')
+    </script>
+</body>
+</html>
