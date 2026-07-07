@@ -63,6 +63,7 @@ func main() {
 		http.ServeFile(w, r, "index.html")
 	})
 
+	mux.HandleFunc("/api/nodes", apiServer.HandleNodes)
 	mux.HandleFunc("/api/vms", apiServer.HandleVMs)
 	mux.HandleFunc("/api/vms/", apiServer.HandleDeleteVM)
 	mux.HandleFunc("/api/containers", apiServer.HandleGetContainers)

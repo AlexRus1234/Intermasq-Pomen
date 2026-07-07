@@ -276,10 +276,9 @@
 
                 async function loadNodes() {
                     try {
-                        const res = await fetch('config.json')
-                        const cfg = await res.json()
-                        nodeNames.value = Object.keys(cfg.nodes || {})
-                    } catch(e) { console.error('config.json недоступен', e) }
+                        const res = await api.get('/api/nodes')
+                        nodeNames.value = res.data || []
+                    } catch(e) { console.error('nodes недоступен', e) }
                 }
 
                 onMounted(() => {

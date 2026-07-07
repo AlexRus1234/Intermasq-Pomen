@@ -38,6 +38,15 @@ func (e *Engine) ListVMs() ([]VMConfig, error) {
 	return e.VMs.List()
 }
 
+// ListNodes отдаёт ключи известных нод (для дропдауна в UI).
+func (e *Engine) ListNodes() []string {
+	out := make([]string, 0, len(e.Nodes))
+	for k := range e.Nodes {
+		out = append(out, k)
+	}
+	return out
+}
+
 // AddVM регистрирует новую ВМ (запрет коллизий по имени — в VMStore.Upsert).
 func (e *Engine) AddVM(vm VMConfig) error {
 	if _, ok := e.Nodes[strings.ToLower(vm.Node)]; !ok {

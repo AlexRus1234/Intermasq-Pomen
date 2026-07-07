@@ -27,6 +27,11 @@ func jsonError(w http.ResponseWriter, status int, message string) {
 
 // === Реестр ВМ (CRUD) ===
 
+// HandleNodes: GET /api/nodes — список ключей нод из config.json (для дропдауна UI).
+func (s *ApiServer) HandleNodes(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, http.StatusOK, s.Engine.ListNodes())
+}
+
 // HandleVMs: GET — список, POST — добавить/обновить.
 func (s *ApiServer) HandleVMs(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
