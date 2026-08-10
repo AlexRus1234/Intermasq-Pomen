@@ -178,7 +178,8 @@
     <script>
         const { createApp, ref, computed, onMounted } = Vue
 
-        const pluginBase = '/plugins/pomen'
+        const hostOrigin = window.parent.location.origin
+        const pluginBase = `${hostOrigin}/plugins/pomen`
         const api = axios.create({ baseURL: pluginBase })
         function getAuthToken() {
             try { return window.parent.localStorage.getItem('token') || '' } catch (_) {}
