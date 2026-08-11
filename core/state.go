@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -35,15 +36,20 @@ type RouteRecord struct {
 	UpdatedAt  string `json:"updated_at"`
 }
 
+// StateStore — потокобезопасное хранилище выданных маршрутов (routes.json).
+// Ранее был без мьютекса (в отличие от VMStore), что приводило к data race
+// при параллельных Provision/Replay — см. audit §14.1.
 type StateStore struct {
 	path string
+	mu   sync.Mutex
 }
 
 func NewStateStore(path string) *StateStore {
 	return &StateStore{path: path}
 }
 
-func (s *StateStore) Load() ([]RouteRecord, error) {
+// load читает routes.json без блокировки — вызывающий код должен держать mu.
+func (s *StateStore) load() ([]RouteRecord, error) {
 	data, err := os.ReadFile(s.path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -61,7 +67,9 @@ func (s *StateStore) Load() ([]RouteRecord, error) {
 	return records, nil
 }
 
-func (s *StateStore) Save(records []RouteRecord) error {
+// save записывает routes.json атомарно (tmp + rename) без блокировки —
+// вызывающий код должен держать mu.
+func (s *StateStore) save(records []RouteRecord) error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0750); err != nil {
 		return err
 	}
@@ -76,8 +84,17 @@ func (s *StateStore) Save(records []RouteRecord) error {
 	return os.Rename(tmp, s.path)
 }
 
+// Load возвращает все записи. Потокобезопасен.
+func (s *StateStore) Load() ([]RouteRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.load()
+}
+
 func (s *StateStore) Upsert(rec RouteRecord) error {
-	records, err := s.Load()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	records, err := s.load()
 	if err != nil {
 		return err
 	}
@@ -96,11 +113,13 @@ func (s *StateStore) Upsert(rec RouteRecord) error {
 	if !found {
 		records = append(records, rec)
 	}
-	return s.Save(records)
+	return s.save(records)
 }
 
 func (s *StateStore) Remove(routeID string) error {
-	records, err := s.Load()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	records, err := s.load()
 	if err != nil {
 		return err
 	}
@@ -110,5 +129,5 @@ func (s *StateStore) Remove(routeID string) error {
 			filtered = append(filtered, r)
 		}
 	}
-	return s.Save(filtered)
+	return s.save(filtered)
 }
