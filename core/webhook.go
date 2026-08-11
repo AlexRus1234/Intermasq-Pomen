@@ -55,6 +55,16 @@ type rawPort struct {
 // ListContainers стучится на вебхук ВМ и возвращает нормализованный список.
 // endpoint — путь на вебхуке (по умолчанию /hooks/podman — стандартный mount adnanh/webhook).
 func (w *WebhookClient) ListContainers(vm VMConfig, endpoint string) ([]ContainerInfo, error) {
+	raw, err := w.fetchContainers(vm, endpoint)
+	if err != nil {
+		return nil, err
+	}
+	return normalizeContainers(raw, vm), nil
+}
+
+// fetchContainers делает HTTP-запрос к вебхуку ВМ и декодирует ответ podman ps.
+// Изолирует транспортную часть от нормализации (которая тестируется отдельно).
+func (w *WebhookClient) fetchContainers(vm VMConfig, endpoint string) ([]rawPodmanContainer, error) {
 	if endpoint == "" {
 		endpoint = "/hooks/podman"
 	}
@@ -86,72 +96,90 @@ func (w *WebhookClient) ListContainers(vm VMConfig, endpoint string) ([]Containe
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
 		return nil, fmt.Errorf("парсинг podman ps от ВМ %s: %w", vm.Name, err)
 	}
+	return raw, nil
+}
 
+// normalizeContainers превращает «сырые» поля podman ps в ContainerInfo с
+// корректными Name/Port/Protocol. Чистая функция — не делает I/O, легко
+// покрывается табличными юнит-тестами (этап 6).
+//
+// Правила нормализации:
+//   • Name — реальное имя без префикса "systemd-" (Quadlet) и без ведущего
+//     числового префикса вида "01-athens" → "athens";
+//   • Port — первый host_port из Ports, переопределяется label "port-NNN";
+//   • Protocol — "http" по умолчанию, переопределяется label "proto-NAME"
+//     или полем Port.Protocol;
+//   • label "name-NAME" полностью заменяет Name (для человекочитаемых доменов).
+func normalizeContainers(raw []rawPodmanContainer, vm VMConfig) []ContainerInfo {
 	result := make([]ContainerInfo, 0, len(raw))
 	for _, c := range raw {
-		realName := ""
-		if len(c.Names) > 0 {
-			realName = c.Names[0]
-		}
-
-		running := strings.EqualFold(c.State, "running") ||
-			strings.HasPrefix(strings.ToLower(c.Status), "up")
-
-		info := ContainerInfo{
-			RealName: realName,
-			Status:   c.Status,
-			Running:  running,
-			Protocol: "http",
-			VMName:   vm.Name,
-			VMIP:     vm.IP,
-			Node:     vm.Node,
-		}
-
-		// Порт: приоритет у label port-XXXX, иначе первый host_port из Ports.
-		if c.Ports != nil {
-			for _, p := range c.Ports {
-				if p.HostPort > 0 {
-					info.Port = strconv.Itoa(p.HostPort)
-					if p.Protocol != "" {
-						info.Protocol = p.Protocol
-					}
-					break
-				}
-			}
-		}
-
-		// Имя: по умолчанию реальное имя без префикса systemd-.
-		info.Name = strings.TrimPrefix(realName, "systemd-")
-		// Срезаем ведущий нумерационный префикс вида "01-athens" -> "athens".
-		if parts := strings.SplitN(info.Name, "-", 2); len(parts) == 2 {
-			if _, err := strconv.Atoi(parts[0]); err == nil {
-				info.Name = parts[1]
-			}
-		}
-
-		// Labels переопределяют.
-		if c.Labels != nil {
-			for k, v := range c.Labels {
-				lk := strings.ToLower(strings.TrimSpace(k))
-				lv := strings.TrimSpace(v)
-				switch {
-				case strings.HasPrefix(lk, "port-"):
-					info.Port = strings.TrimPrefix(lk, "port-")
-					if lv != "" {
-						info.Port = lv
-					}
-				case strings.HasPrefix(lk, "proto-"):
-					info.Protocol = strings.TrimPrefix(lk, "proto-")
-					if lv != "" {
-						info.Protocol = lv
-					}
-				case strings.HasPrefix(lk, "name-"):
-					info.Name = lv
-				}
-			}
-		}
-
-		result = append(result, info)
+		result = append(result, normalizeContainer(c, vm))
 	}
-	return result, nil
+	return result
+}
+
+func normalizeContainer(c rawPodmanContainer, vm VMConfig) ContainerInfo {
+	realName := ""
+	if len(c.Names) > 0 {
+		realName = c.Names[0]
+	}
+
+	running := strings.EqualFold(c.State, "running") ||
+		strings.HasPrefix(strings.ToLower(c.Status), "up")
+
+	info := ContainerInfo{
+		RealName: realName,
+		Status:   c.Status,
+		Running:  running,
+		Protocol: "http",
+		VMName:   vm.Name,
+		VMIP:     vm.IP,
+		Node:     vm.Node,
+	}
+
+	// Порт: приоритет у label port-XXXX, иначе первый host_port из Ports.
+	if c.Ports != nil {
+		for _, p := range c.Ports {
+			if p.HostPort > 0 {
+				info.Port = strconv.Itoa(p.HostPort)
+				if p.Protocol != "" {
+					info.Protocol = p.Protocol
+				}
+				break
+			}
+		}
+	}
+
+	// Имя: по умолчанию реальное имя без префикса systemd-.
+	info.Name = strings.TrimPrefix(realName, "systemd-")
+	// Срезаем ведущий нумерационный префикс вида "01-athens" -> "athens".
+	if parts := strings.SplitN(info.Name, "-", 2); len(parts) == 2 {
+		if _, err := strconv.Atoi(parts[0]); err == nil {
+			info.Name = parts[1]
+		}
+	}
+
+	// Labels переопределяют.
+	if c.Labels != nil {
+		for k, v := range c.Labels {
+			lk := strings.ToLower(strings.TrimSpace(k))
+			lv := strings.TrimSpace(v)
+			switch {
+			case strings.HasPrefix(lk, "port-"):
+				info.Port = strings.TrimPrefix(lk, "port-")
+				if lv != "" {
+					info.Port = lv
+				}
+			case strings.HasPrefix(lk, "proto-"):
+				info.Protocol = strings.TrimPrefix(lk, "proto-")
+				if lv != "" {
+					info.Protocol = lv
+				}
+			case strings.HasPrefix(lk, "name-"):
+				info.Name = lv
+			}
+		}
+	}
+
+	return info
 }
