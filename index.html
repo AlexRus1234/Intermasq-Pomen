@@ -224,9 +224,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
                 const canAddVM = computed(() =>
                     newVM.value.name && newVM.value.node && newVM.value.ip && newVM.value.webhook_url
                 )
-                const domainExample = computed(() =>
-                    `<name>.${selectedVM.value || '<vm>'}.server.internal`
-                )
+                const domainExample = computed(() => {
+                    const vm = selectedVM.value || '<vm>'
+                    const found = vms.value.find(x => x.name === vm)
+                    const node = found?.node || '<node>'
+                    return `<name>.${vm}.${node}.internal`
+                })
 
                 async function loadVMs() {
                     try {

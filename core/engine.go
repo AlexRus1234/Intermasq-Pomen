@@ -86,7 +86,7 @@ func (e *Engine) GetContainers(vmName string) ([]ContainerInfo, error) {
 }
 
 // Provision выдаёт домен контейнеру: пишет маршрут в Caddy и запись в state.
-// DNS не трогается — wildcard в dnsmasq уже ведёт *.server.internal на Caddy.
+// DNS не трогается — wildcard в dnsmasq уже ведёт *.<node>.internal на Caddy.
 //
 // Параметры берутся из ContainerInfo (уже распарсенные labels).
 func (e *Engine) Provision(c ContainerInfo) (string, error) {
