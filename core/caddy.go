@@ -124,6 +124,17 @@ func (c *CaddyClient) RestartCaddy(nodeName string) error {
 	return nil
 }
 
+// upsertByID выполняет GET /id/<id>; 200 → PUT (update), иначе POST (create).
+// Если POST возвращает 500, мы различаем два случая:
+//   - родительский путь отсутствует (например /config/apps/tls/automation
+//     ещё не создан) — тогда вызываем initIfMissing и повторяем POST;
+//   - реальная внутренняя ошибка Caddy — возвращаем ошибку с телом ответа.
+//
+// Различение делается по результату повторного POST после init: если он тоже
+// падает, это точно не "parent missing", а что-то другое (невалидный payload,
+// конфликт ID, истёкший сертификат и т.п.) — тогда ошибка возвращается наверх
+// с понятным сообщением. Первичный 500 до init логируем, чтобы дать след в
+// журнале даже при успешном autorecovery.
 func (c *CaddyClient) upsertByID(baseURL, id, createPath string, payload map[string]interface{}, initIfMissing func() error) error {
 	data, _ := json.Marshal(payload)
 
@@ -155,9 +166,11 @@ func (c *CaddyClient) upsertByID(baseURL, id, createPath string, payload map[str
 	defer resp.Body.Close()
 
 	if resp.StatusCode == 500 {
+		firstBody, _ := io.ReadAll(resp.Body)
 		if initIfMissing != nil {
+			fmt.Printf("[CADDY] POST %s → 500 (предположительно нет родителя): %s; init+retry\n", createPath, string(firstBody))
 			if err := initIfMissing(); err != nil {
-				return err
+				return fmt.Errorf("init parent для %s: %w", createPath, err)
 			}
 			req2, _ := http.NewRequest("POST", baseURL+createPath, bytes.NewBuffer(data))
 			req2.Header.Set("Content-Type", "application/json")
@@ -167,13 +180,13 @@ func (c *CaddyClient) upsertByID(baseURL, id, createPath string, payload map[str
 			}
 			defer resp2.Body.Close()
 			if resp2.StatusCode >= 400 {
-				body, _ := io.ReadAll(resp2.Body)
-				return fmt.Errorf("POST %s после init (%d): %s", createPath, resp2.StatusCode, string(body))
+				body2, _ := io.ReadAll(resp2.Body)
+				return fmt.Errorf("POST %s после init всё ещё падает (%d); первичная ошибка была: %s | вторичная: %s",
+					createPath, resp2.StatusCode, string(firstBody), string(body2))
 			}
 			return nil
 		}
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("POST %s (500): %s", createPath, string(body))
+		return fmt.Errorf("POST %s (500, initIfMissing не задан): %s", createPath, string(firstBody))
 	}
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)

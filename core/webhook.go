@@ -60,8 +60,10 @@ func (w *WebhookClient) ListContainers(vm VMConfig, endpoint string) ([]Containe
 	}
 	url := strings.TrimRight(vm.WebhookURL, "/") + endpoint
 
-	// adnanh/webhook требует Content-Type: application/json и непустой body,
-	// иначе падает с "unsupported content type" до проверки trigger-rule.
+	// WORKAROUND: adnanh/webhook падает с "unsupported content type" ДО
+	// проверки trigger-rule, если у запроса нет body. Шлём пустой JSON-объект
+	// и Content-Type: application/json, чтобы триггер отработал. Когда перейдём
+	// на другой вебхук-демон — body можно убрать.
 	req, err := http.NewRequest("POST", url, bytes.NewBufferString("{}"))
 	if err != nil {
 		return nil, err
