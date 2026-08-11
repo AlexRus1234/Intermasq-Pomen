@@ -17,18 +17,20 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"pomen/api"
 	"pomen/core"
 	"pomen/internal/version"
+	"strings"
 	"syscall"
+	"time"
 )
 
 type Config struct {
@@ -100,27 +102,59 @@ func main() {
 	mux.HandleFunc("/api/replay", apiServer.HandleReplay)
 
 	socketPath := os.Getenv("PLUGIN_SOCKET")
+	devPort := os.Getenv("POMEN_DEV_PORT")
 
-	if socketPath != "" {
-		os.Remove(socketPath)
-		listener, err := net.Listen("unix", socketPath)
+	srv := &http.Server{Handler: mux}
+	errCh := make(chan error, 1)
+
+	switch {
+	case socketPath != "":
+		// Контракт Intermasq: unix-сокет с правами 0770.
+		// listenUnix (платформо-зависимый, см. socket_{unix,windows}.go)
+		// создаёт сокет с правильными правами atomically — без race window
+		// между net.Listen и os.Chmod (audit §14.11).
+		listener, err := listenUnix(socketPath)
 		if err != nil {
 			log.Fatalf("Ошибка создания сокета: %v", err)
 		}
-
-		c := make(chan os.Signal, 1)
-		signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-		go func() {
-			<-c
-			os.Remove(socketPath)
-			os.Exit(1)
-		}()
-
 		fmt.Printf("Pomen %s started on unix socket: %s\n", version.Version, socketPath)
-		os.Chmod(socketPath, 0770)
-		http.Serve(listener, mux)
-	} else {
-		fmt.Printf("Pomen %s started on TCP :5001\n", version.Version)
-		log.Fatal(http.ListenAndServe(":5001", mux))
+		go func() { errCh <- srv.Serve(listener) }()
+
+	case devPort != "":
+		// Dev-режим для локальной разработки и smoke/E2E тестов в CI.
+		// НЕ для production: unix-сокета нет, secrets через env.
+		addr := strings.TrimPrefix(devPort, ":")
+		log.Printf("WARNING: dev mode on TCP :%s — not for production", addr)
+		fmt.Printf("Pomen %s started on TCP :%s (DEV)\n", version.Version, addr)
+		srv.Addr = ":" + addr
+		go func() { errCh <- srv.ListenAndServe() }()
+
+	default:
+		log.Fatal("PLUGIN_SOCKET (production) or POMEN_DEV_PORT (dev) must be set")
+	}
+
+	// Graceful shutdown: SIGINT/SIGTERM → Shutdown(ctx), exit 0.
+	// Раньше был os.Exit(1) на SIGTERM — systemd мог трактовать это как
+	// падение и писать ошибку в журнал (audit §14.6).
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+
+	select {
+	case err := <-errCh:
+		if err != nil && err != http.ErrServerClosed {
+			log.Fatalf("server error: %v", err)
+		}
+	case sig := <-stop:
+		log.Printf("received %s, shutting down...", sig)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Printf("shutdown error: %v", err)
+		}
+		<-errCh // ждём выхода srv.Serve
+	}
+
+	if socketPath != "" {
+		os.Remove(socketPath)
 	}
 }
