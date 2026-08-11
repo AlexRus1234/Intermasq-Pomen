@@ -1,3 +1,69 @@
+# Pomen - plugin for Intermasq
+# Copyright (C) 2026 AlexRus1234
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+# Go
 pomen
 pomen-linux
+pomen-linux-*
+pomen-ci
 *.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.backup
+vendor/
+
+# Node (for future tests)
+node_modules/
+playwright-report/
+test-results/
+dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Local runtime data
+routes.json
+vms.json
+
+# Logs
+*.log
+npm-debug.log*
+
+# Plans (local only)
+планы/
+
+# Logs (local only)
+логи/
+
+# Refactoring artifacts (local only)
+рефакторинг/

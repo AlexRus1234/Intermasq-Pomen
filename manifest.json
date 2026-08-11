@@ -1,5 +1,6 @@
 {
     "id": "pomen",
     "name": "Pomen",
+    "version": "1.0.0",
     "bin": "pomen"
 }

@@ -1,3 +1,19 @@
+// Pomen - plugin for Intermasq
+// Copyright (C) 2026 AlexRus1234
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
+
 package core
 
 import (
@@ -16,7 +32,9 @@ type CaddyClient struct {
 }
 
 func NewCaddyClient(urls map[string]string) *CaddyClient {
-	for k, v := range urls { urls[k] = strings.TrimRight(v, "/") }
+	for k, v := range urls {
+		urls[k] = strings.TrimRight(v, "/")
+	}
 	return &CaddyClient{BaseURLs: urls, client: &http.Client{Timeout: 10 * time.Second}}
 }
 
@@ -32,8 +50,8 @@ func GenerateRouteJSON(domain, targetIP, targetPort, protocol, routeID string) m
 		"transport": transport,
 	}
 	return map[string]interface{}{
-		"@id": routeID,
-		"match": []interface{}{map[string]interface{}{"host": []string{domain}}},
+		"@id":    routeID,
+		"match":  []interface{}{map[string]interface{}{"host": []string{domain}}},
 		"handle": []interface{}{handler},
 	}
 }
@@ -59,7 +77,9 @@ func GenerateTLSPolicyJSON(domain, tlsID string) map[string]interface{} {
 
 func (c *CaddyClient) AddRoute(nodeName, domain, targetIP, targetPort, protocol, routeID, tlsID string) error {
 	baseURL, ok := c.BaseURLs[strings.ToLower(nodeName)]
-	if !ok { return fmt.Errorf("URL Caddy не найден для ноды %s", nodeName) }
+	if !ok {
+		return fmt.Errorf("URL Caddy не найден для ноды %s", nodeName)
+	}
 
 	fmt.Printf("[CADDY] Настройка %s на ноде %s...\n", domain, nodeName)
 
@@ -82,7 +102,9 @@ func (c *CaddyClient) AddRoute(nodeName, domain, targetIP, targetPort, protocol,
 			reqInit, _ := http.NewRequest("PUT", baseURL+"/config/apps/tls", bytes.NewBuffer(initTlsPayload))
 			reqInit.Header.Set("Content-Type", "application/json")
 			rInit, _ := c.client.Do(reqInit)
-			if rInit != nil { rInit.Body.Close() }
+			if rInit != nil {
+				rInit.Body.Close()
+			}
 		} else {
 			resp1.Body.Close()
 		}
@@ -104,7 +126,9 @@ func (c *CaddyClient) AddRoute(nodeName, domain, targetIP, targetPort, protocol,
 	req2.Header.Set("Content-Type", "application/json")
 	resp2, err2 := c.client.Do(req2)
 
-	if err2 != nil { return err2 }
+	if err2 != nil {
+		return err2
+	}
 
 	if resp2.StatusCode == 500 {
 		resp2.Body.Close()
@@ -116,7 +140,9 @@ func (c *CaddyClient) AddRoute(nodeName, domain, targetIP, targetPort, protocol,
 		reqInitSrv, _ := http.NewRequest("PUT", baseURL+"/config/apps/http/servers/srv0", bytes.NewBuffer(initPayload))
 		reqInitSrv.Header.Set("Content-Type", "application/json")
 		rInitSrv, _ := c.client.Do(reqInitSrv)
-		if rInitSrv != nil { rInitSrv.Body.Close() }
+		if rInitSrv != nil {
+			rInitSrv.Body.Close()
+		}
 	} else if resp2.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp2.Body)
 		resp2.Body.Close()
@@ -137,7 +163,9 @@ func (c *CaddyClient) AddRoute(nodeName, domain, targetIP, targetPort, protocol,
 
 func (c *CaddyClient) DeleteRouteAndTLS(nodeName, routeID, tlsID string) error {
 	baseURL, ok := c.BaseURLs[strings.ToLower(nodeName)]
-	if !ok { return nil }
+	if !ok {
+		return nil
+	}
 
 	req1, _ := http.NewRequest("DELETE", fmt.Sprintf("%s/id/%s", baseURL, routeID), nil)
 	c.client.Do(req1)
@@ -150,7 +178,9 @@ func (c *CaddyClient) DeleteRouteAndTLS(nodeName, routeID, tlsID string) error {
 
 func (c *CaddyClient) RestartCaddy(nodeName string) error {
 	baseURL, ok := c.BaseURLs[strings.ToLower(nodeName)]
-	if !ok { return fmt.Errorf("URL Caddy не найден для ноды %s", nodeName) }
+	if !ok {
+		return fmt.Errorf("URL Caddy не найден для ноды %s", nodeName)
+	}
 	fmt.Printf("[CADDY] Рестарт ноды %s (POST /stop)...\n", nodeName)
 	_, err := http.Post(baseURL+"/stop", "application/json", nil)
 	return err
@@ -166,7 +196,9 @@ func (c *CaddyClient) upsertByID(baseURL, id, createPath string, payload map[str
 			req, _ := http.NewRequest("PUT", fmt.Sprintf("%s/id/%s", baseURL, id), bytes.NewBuffer(data))
 			req.Header.Set("Content-Type", "application/json")
 			resp, err := c.client.Do(req)
-			if err != nil { return err }
+			if err != nil {
+				return err
+			}
 			defer resp.Body.Close()
 			if resp.StatusCode >= 400 {
 				body, _ := io.ReadAll(resp.Body)
@@ -179,16 +211,22 @@ func (c *CaddyClient) upsertByID(baseURL, id, createPath string, payload map[str
 	req, _ := http.NewRequest("POST", baseURL+createPath, bytes.NewBuffer(data))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.client.Do(req)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == 500 {
 		if initIfMissing != nil {
-			if err := initIfMissing(); err != nil { return err }
+			if err := initIfMissing(); err != nil {
+				return err
+			}
 			req2, _ := http.NewRequest("POST", baseURL+createPath, bytes.NewBuffer(data))
 			req2.Header.Set("Content-Type", "application/json")
 			resp2, err := c.client.Do(req2)
-			if err != nil { return err }
+			if err != nil {
+				return err
+			}
 			defer resp2.Body.Close()
 			if resp2.StatusCode >= 400 {
 				body, _ := io.ReadAll(resp2.Body)
@@ -208,7 +246,9 @@ func (c *CaddyClient) upsertByID(baseURL, id, createPath string, payload map[str
 
 func (c *CaddyClient) ReplayRoute(nodeName, domain, targetIP, targetPort, protocol, routeID, tlsID string) error {
 	baseURL, ok := c.BaseURLs[strings.ToLower(nodeName)]
-	if !ok { return fmt.Errorf("URL Caddy не найден для ноды %s", nodeName) }
+	if !ok {
+		return fmt.Errorf("URL Caddy не найден для ноды %s", nodeName)
+	}
 
 	fmt.Printf("[CADDY] Replay %s (%s)...\n", domain, routeID)
 
@@ -222,7 +262,9 @@ func (c *CaddyClient) ReplayRoute(nodeName, domain, targetIP, targetPort, protoc
 		req, _ := http.NewRequest("PUT", baseURL+"/config/apps/tls", bytes.NewBuffer(initTlsPayload))
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := c.client.Do(req)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		resp.Body.Close()
 		return nil
 	}
@@ -240,13 +282,15 @@ func (c *CaddyClient) ReplayRoute(nodeName, domain, targetIP, targetPort, protoc
 	routeConfig := GenerateRouteJSON(domain, targetIP, targetPort, protocol, routeID)
 	initRoute := func() error {
 		initPayload, _ := json.Marshal(map[string]interface{}{
-			"listen":  []string{":443"},
-			"routes":  []interface{}{routeConfig},
+			"listen": []string{":443"},
+			"routes": []interface{}{routeConfig},
 		})
 		req, _ := http.NewRequest("PUT", baseURL+"/config/apps/http/servers/srv0", bytes.NewBuffer(initPayload))
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := c.client.Do(req)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		resp.Body.Close()
 		return nil
 	}
