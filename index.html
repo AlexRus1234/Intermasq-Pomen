@@ -196,13 +196,35 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
     <script>
         const { createApp, ref, computed, onMounted } = Vue
 
-        const hostOrigin = window.parent.location.origin
-        const pluginBase = `${hostOrigin}/plugins/pomen`
-        const api = axios.create({ baseURL: pluginBase })
+        // pluginBase вычисляется один раз при загрузке:
+        //   • production — Pomen крутится в iframe внутри панели Intermasq.
+        //     API нужно дёргать через reverse-proxy панели: <parent origin>/plugins/pomen.
+        //   • dev (POMEN_DEV_PORT) — index.html открыт directly, без parent.
+        //     pluginBase пустой → axios ходит по относительным путям того же origin.
+        //   • cross-origin parent или blob-iframe — window.parent.location недоступен
+        //     (SecurityError). Считаем это dev-сценарием и используем тот же origin.
+        function getPluginBase() {
+            try {
+                const parentOrigin = window.parent.location.origin
+                // 'null' origin бывает в sandboxed/popup iframe — игнорируем.
+                if (parentOrigin && parentOrigin !== 'null' && parentOrigin !== window.location.origin) {
+                    return `${parentOrigin}/plugins/pomen`
+                }
+            } catch (_) {
+                // cross-origin parent: доступ к location запрещён → не вкладка панели.
+            }
+            return ''
+        }
+
+        // getAuthToken — JWT панели Intermasq из localStorage. В iframe parent
+        // первым (production), затем текущий document (dev/E2E). На любом
+        // SecurityError fallback на пустую строку → axios шлёт без Authorization.
         function getAuthToken() {
             try { return window.parent.localStorage.getItem('token') || '' } catch (_) {}
             try { return localStorage.getItem('token') || '' } catch (_) { return '' }
         }
+
+        const api = axios.create({ baseURL: getPluginBase() })
         api.interceptors.request.use(config => {
             const token = getAuthToken()
             if (token) config.headers.Authorization = `Bearer ${token}`
