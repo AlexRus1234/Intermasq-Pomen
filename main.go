@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -32,6 +33,41 @@ import (
 	"syscall"
 	"time"
 )
+
+// webContent embed'ит всю директорию web/. Бинарь Pomen не зависит от CWD —
+// index.html и app.js всегда с ним (audit §14.24: раньше читался "index.html"
+// из текущей директории, что ломалось при запуске из произвольного места).
+//
+//go:embed web
+var webContent embed.FS
+
+// webUIHandler раздаёт index.html на "/" (и "/index.html"), app.js на "/app.js",
+// 404 на всё остальное. Без whitelist любой файл из web/ утёк бы; без явного
+// switch http.FileServer делает неочевидные 301-редиректы, поэтому читаем файлы
+// из embed.FS напрямую.
+func webUIHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var name, contentType string
+		switch r.URL.Path {
+		case "/", "/index.html":
+			name = "web/index.html"
+			contentType = "text/html; charset=utf-8"
+		case "/app.js":
+			name = "web/app.js"
+			contentType = "application/javascript; charset=utf-8"
+		default:
+			http.NotFound(w, r)
+			return
+		}
+		data, err := webContent.ReadFile(name)
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", contentType)
+		w.Write(data)
+	}
+}
 
 type Config struct {
 	BaseDomain string                     `json:"base_domain"`
@@ -85,9 +121,7 @@ func main() {
 	engine := core.NewEngine(caddyClient, stateStore, vmStore, webhookClient, cfg.BaseDomain, cfg.Nodes)
 
 	mux := http.NewServeMux()
-	api.Register(mux, engine, func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "index.html")
-	})
+	api.Register(mux, engine, webUIHandler())
 
 	socketPath := os.Getenv("PLUGIN_SOCKET")
 	devPort := os.Getenv("POMEN_DEV_PORT")

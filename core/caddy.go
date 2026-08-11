@@ -75,8 +75,8 @@ func GenerateTLSPolicy(domain, tlsID string) CaddyTLSPolicy {
 		ID:       tlsID,
 		Subjects: []string{domain},
 		Issuers: []CaddyIssuer{{
-			Module: "acme",
-			CA:     "https://172.20.0.1:9000/acme/acme/directory",
+			Module:               "acme",
+			CA:                   "https://172.20.0.1:9000/acme/acme/directory",
 			TrustedRootsPEMFiles: []string{"/etc/caddy/root_ca.crt"},
 			Challenges: CaddyChallenges{
 				HTTP: CaddyHTTPChallenge{Disabled: true},

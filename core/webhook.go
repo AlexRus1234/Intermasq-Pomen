@@ -104,12 +104,12 @@ func (w *WebhookClient) fetchContainers(vm VMConfig, endpoint string) ([]rawPodm
 // покрывается табличными юнит-тестами (этап 6).
 //
 // Правила нормализации:
-//   • Name — реальное имя без префикса "systemd-" (Quadlet) и без ведущего
+//   - Name — реальное имя без префикса "systemd-" (Quadlet) и без ведущего
 //     числового префикса вида "01-athens" → "athens";
-//   • Port — первый host_port из Ports, переопределяется label "port-NNN";
-//   • Protocol — "http" по умолчанию, переопределяется label "proto-NAME"
+//   - Port — первый host_port из Ports, переопределяется label "port-NNN";
+//   - Protocol — "http" по умолчанию, переопределяется label "proto-NAME"
 //     или полем Port.Protocol;
-//   • label "name-NAME" полностью заменяет Name (для человекочитаемых доменов).
+//   - label "name-NAME" полностью заменяет Name (для человекочитаемых доменов).
 func normalizeContainers(raw []rawPodmanContainer, vm VMConfig) []ContainerInfo {
 	result := make([]ContainerInfo, 0, len(raw))
 	for _, c := range raw {

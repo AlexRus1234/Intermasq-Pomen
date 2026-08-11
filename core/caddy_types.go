@@ -51,7 +51,7 @@ type CaddyUpstream struct {
 // При protocol="https" добавляется TLS-блок с insecure_skip_verify
 // (upstream — самоподписанные сертификаты в .internal сети).
 type CaddyTransport struct {
-	Protocol string           `json:"protocol"` // "http"
+	Protocol string            `json:"protocol"` // "http"
 	TLS      *CaddyUpstreamTLS `json:"tls,omitempty"`
 }
 
