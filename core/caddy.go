@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -96,17 +97,17 @@ func (c *CaddyClient) DeleteRouteAndTLS(nodeName, routeID, tlsID string) error {
 	for _, id := range []string{routeID, tlsID} {
 		req, err := http.NewRequest("DELETE", caddyIDURL(baseURL, id), nil)
 		if err != nil {
-			fmt.Printf("[CADDY] delete %s: build request: %v\n", id, err)
+			slog.Warn("caddy delete: build request failed", "node", nodeName, "id", id, "err", err)
 			continue
 		}
 		resp, err := c.client.Do(req)
 		if err != nil {
-			fmt.Printf("[CADDY] delete %s: %v\n", id, err)
+			slog.Warn("caddy delete: request failed", "node", nodeName, "id", id, "err", err)
 			continue
 		}
 		resp.Body.Close()
 		if resp.StatusCode >= 400 {
-			fmt.Printf("[CADDY] delete %s: HTTP %d\n", id, resp.StatusCode)
+			slog.Warn("caddy delete: non-OK status", "node", nodeName, "id", id, "status", resp.StatusCode)
 		}
 	}
 	return nil
@@ -117,7 +118,7 @@ func (c *CaddyClient) RestartCaddy(nodeName string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("[CADDY] Рестарт ноды %s (POST %s)...\n", nodeName, caddyStop)
+	slog.Info("caddy restart", "node", nodeName, "endpoint", caddyStop)
 	resp, err := http.Post(baseURL+caddyStop, "application/json", nil)
 	if err != nil {
 		return err
@@ -178,7 +179,8 @@ func (c *CaddyClient) upsertByID(baseURL, id, createPath string, payload interfa
 	if resp.StatusCode == 500 {
 		firstBody, _ := io.ReadAll(resp.Body)
 		if initIfMissing != nil {
-			fmt.Printf("[CADDY] POST %s → 500 (предположительно нет родителя): %s; init+retry\n", createPath, string(firstBody))
+			slog.Info("caddy POST 500 — assuming missing parent, retrying after init",
+				"path", createPath, "id", id, "body", string(firstBody))
 			if err := initIfMissing(); err != nil {
 				return fmt.Errorf("init parent для %s: %w", createPath, err)
 			}
@@ -211,7 +213,7 @@ func (c *CaddyClient) ReplayRoute(nodeName, domain, targetIP, targetPort, protoc
 		return err
 	}
 
-	fmt.Printf("[CADDY] Replay %s (%s)...\n", domain, routeID)
+	slog.Info("caddy replay", "domain", domain, "route_id", routeID, "tls_id", tlsID, "node", nodeName)
 
 	tlsPolicy := GenerateTLSPolicy(domain, tlsID)
 	initTLS := func() error {
