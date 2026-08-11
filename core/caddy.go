@@ -167,12 +167,25 @@ func (c *CaddyClient) DeleteRouteAndTLS(nodeName, routeID, tlsID string) error {
 		return nil
 	}
 
-	req1, _ := http.NewRequest("DELETE", fmt.Sprintf("%s/id/%s", baseURL, routeID), nil)
-	c.client.Do(req1)
-
-	req2, _ := http.NewRequest("DELETE", fmt.Sprintf("%s/id/%s", baseURL, tlsID), nil)
-	c.client.Do(req2)
-
+	// Best-effort удаление маршрута и TLS-политики. Ошибки логируем, но не
+	// возвращаем — это компенсационное действие при Deprovision, и fail
+	// одного из двух DELETE не должен блокировать чистку state.
+	for _, id := range []string{routeID, tlsID} {
+		req, err := http.NewRequest("DELETE", fmt.Sprintf("%s/id/%s", baseURL, id), nil)
+		if err != nil {
+			fmt.Printf("[CADDY] delete %s: build request: %v\n", id, err)
+			continue
+		}
+		resp, err := c.client.Do(req)
+		if err != nil {
+			fmt.Printf("[CADDY] delete %s: %v\n", id, err)
+			continue
+		}
+		resp.Body.Close()
+		if resp.StatusCode >= 400 {
+			fmt.Printf("[CADDY] delete %s: HTTP %d\n", id, resp.StatusCode)
+		}
+	}
 	return nil
 }
 
@@ -182,8 +195,16 @@ func (c *CaddyClient) RestartCaddy(nodeName string) error {
 		return fmt.Errorf("URL Caddy не найден для ноды %s", nodeName)
 	}
 	fmt.Printf("[CADDY] Рестарт ноды %s (POST /stop)...\n", nodeName)
-	_, err := http.Post(baseURL+"/stop", "application/json", nil)
-	return err
+	resp, err := http.Post(baseURL+"/stop", "application/json", nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("POST /stop (%d): %s", resp.StatusCode, string(body))
+	}
+	return nil
 }
 
 func (c *CaddyClient) upsertByID(baseURL, id, createPath string, payload map[string]interface{}, initIfMissing func() error) error {
@@ -275,8 +296,14 @@ func (c *CaddyClient) ReplayRoute(nodeName, domain, targetIP, targetPort, protoc
 	automatePayload, _ := json.Marshal([]string{domain})
 	reqAuth, _ := http.NewRequest("POST", baseURL+"/config/apps/tls/certificates/automate", bytes.NewBuffer(automatePayload))
 	reqAuth.Header.Set("Content-Type", "application/json")
-	if respAuth, err := c.client.Do(reqAuth); err == nil && respAuth != nil {
-		respAuth.Body.Close()
+	respAuth, err := c.client.Do(reqAuth)
+	if err != nil {
+		return fmt.Errorf("automate: %w", err)
+	}
+	defer respAuth.Body.Close()
+	if respAuth.StatusCode >= 400 {
+		body, _ := io.ReadAll(respAuth.Body)
+		return fmt.Errorf("automate (%d): %s", respAuth.StatusCode, string(body))
 	}
 
 	routeConfig := GenerateRouteJSON(domain, targetIP, targetPort, protocol, routeID)
