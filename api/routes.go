@@ -31,6 +31,21 @@ func NewApiServer(e *core.Engine) *ApiServer {
 	return &ApiServer{Engine: e}
 }
 
+// VMView — публичное представление ВМ без секретов.
+// Раньше GET /api/vms отдавал VMConfig целиком, включая поле Secret —
+// это утечка вебхук-секретов через API (audit §14.3). Принимаем Secret
+// при POST, но никогда не возвращаем.
+type VMView struct {
+	Name       string `json:"name"`
+	Node       string `json:"node"`
+	IP         string `json:"ip"`
+	WebhookURL string `json:"webhook_url"`
+}
+
+func toVMView(v core.VMConfig) VMView {
+	return VMView{Name: v.Name, Node: v.Node, IP: v.IP, WebhookURL: v.WebhookURL}
+}
+
 func jsonResponse(w http.ResponseWriter, status int, payload interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -57,7 +72,11 @@ func (s *ApiServer) HandleVMs(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		jsonResponse(w, http.StatusOK, vms)
+		views := make([]VMView, len(vms))
+		for i, v := range vms {
+			views[i] = toVMView(v)
+		}
+		jsonResponse(w, http.StatusOK, views)
 
 	case http.MethodPost:
 		var vm core.VMConfig
