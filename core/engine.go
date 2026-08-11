@@ -105,14 +105,19 @@ func (e *Engine) Provision(c ContainerInfo) (string, error) {
 	routeID := fmt.Sprintf("pod-%s-%s-%s", vmName, name, nodeKey)
 	tlsID := fmt.Sprintf("podtls-%s-%s-%s", vmName, name, nodeKey)
 
-	// Используем ReplayRoute (upsertByID) вместо AddRoute (чистый POST),
-	// чтобы повторный Provision того же домена не создавал дубль TLS-политики
-	// в Caddy ("cannot apply more than one automation policy to host").
+	// ReplayRoute использует upsertByID: GET /id/<id> → PUT если существует,
+	// иначе POST с инициализацией родительского пути. Это гарантирует, что
+	// повторный Provision того же домена не создаст дубль TLS-политики в
+	// Caddy ("cannot apply more than one automation policy to host").
 	if err := e.Caddy.ReplayRoute(nodeKey, domain, c.VMIP, c.Port, c.Protocol, routeID, tlsID); err != nil {
 		return "", fmt.Errorf("Caddy ошибка: %w", err)
 	}
 
-	// The Nuke: жесткий рестарт Caddy для применения сертификата (как AddRoute в Povez).
+	// The Nuke: жёсткий рестарт Caddy для применения выпущенного сертификата.
+	// POST /stop завершает процесс; systemd (Restart=always) поднимает его
+	// снова с чистым кэшем. Альтернатива — reload — иногда не подхватывает
+	// новый сертификат сразу; /stop надёжнее. Согласованная цена — даунтайм
+	// ~1-2 секунды на ноде.
 	if err := e.Caddy.RestartCaddy(nodeKey); err != nil {
 		return "", fmt.Errorf("Caddy restart: %w", err)
 	}
