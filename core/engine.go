@@ -25,16 +25,19 @@ import (
 // Engine — оркестратор Pomen.
 // В отличие от Povez, не обращается к Proxmox/Intermasq: источник контейнеров —
 // вебхуки ВМ (по кнопке), DNS не пишется (wildcard в dnsmasq), Caddy — те же, что в Povez.
+//
+// Caddy и Webhook держит через интерфейсы (CaddyAPI/WebhookAPI), что позволяет
+// подменять их моками в тестах Engine без поднятия реальной инфраструктуры.
 type Engine struct {
-	Caddy   *CaddyClient
+	Caddy   CaddyAPI
 	State   *StateStore
 	VMs     *VMStore
-	Webhook *WebhookClient
+	Webhook WebhookAPI
 	Domain  string
 	Nodes   map[string]NodeConfig
 }
 
-func NewEngine(caddy *CaddyClient, state *StateStore, vms *VMStore, wh *WebhookClient, domain string, nodes map[string]NodeConfig) *Engine {
+func NewEngine(caddy CaddyAPI, state *StateStore, vms *VMStore, wh WebhookAPI, domain string, nodes map[string]NodeConfig) *Engine {
 	cleanNodes := make(map[string]NodeConfig)
 	for k, v := range nodes {
 		cleanNodes[strings.ToLower(k)] = v
