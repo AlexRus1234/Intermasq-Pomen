@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -129,17 +130,18 @@ func (s *VMStore) Delete(name string) error {
 		return err
 	}
 	lname := strings.ToLower(name)
-	filtered := vms[:0]
 	found := false
 	for _, v := range vms {
 		if strings.ToLower(v.Name) == lname {
 			found = true
-			continue
+			break
 		}
-		filtered = append(filtered, v)
 	}
 	if !found {
 		return fmt.Errorf("ВМ %s не найдена", name)
 	}
+	filtered := slices.DeleteFunc(vms, func(v VMConfig) bool {
+		return strings.ToLower(v.Name) == lname
+	})
 	return s.save(filtered)
 }

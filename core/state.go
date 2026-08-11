@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 )
@@ -123,11 +124,8 @@ func (s *StateStore) Remove(routeID string) error {
 	if err != nil {
 		return err
 	}
-	filtered := records[:0]
-	for _, r := range records {
-		if r.RouteID != routeID {
-			filtered = append(filtered, r)
-		}
-	}
+	filtered := slices.DeleteFunc(records, func(r RouteRecord) bool {
+		return r.RouteID == routeID
+	})
 	return s.save(filtered)
 }
