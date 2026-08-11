@@ -41,46 +41,52 @@ func NewCaddyClient(urls map[string]string) *CaddyClient {
 	return &CaddyClient{BaseURLs: trimmed, client: &http.Client{Timeout: 10 * time.Second}}
 }
 
-func GenerateRouteJSON(domain, targetIP, targetPort, protocol, routeID string) map[string]interface{} {
-	upstream := map[string]interface{}{"dial": fmt.Sprintf("%s:%s", targetIP, targetPort)}
-	transport := map[string]interface{}{"protocol": "http"}
+// baseURLFor возвращает базовый URL Caddy для ноды (case-insensitive lookup).
+func (c *CaddyClient) baseURLFor(nodeName string) (string, error) {
+	if u, ok := c.BaseURLs[strings.ToLower(nodeName)]; ok {
+		return u, nil
+	}
+	return "", fmt.Errorf("URL Caddy не найден для ноды %s", nodeName)
+}
+
+// GenerateRoute собирает CaddyRoute для домена → upstream.
+func GenerateRoute(domain, targetIP, targetPort, protocol, routeID string) CaddyRoute {
+	transport := CaddyTransport{Protocol: "http"}
 	if protocol == "https" {
-		transport["tls"] = map[string]interface{}{"insecure_skip_verify": true}
+		transport.TLS = &CaddyUpstreamTLS{InsecureSkipVerify: true}
 	}
-	handler := map[string]interface{}{
-		"handler":   "reverse_proxy",
-		"upstreams": []interface{}{upstream},
-		"transport": transport,
-	}
-	return map[string]interface{}{
-		"@id":    routeID,
-		"match":  []interface{}{map[string]interface{}{"host": []string{domain}}},
-		"handle": []interface{}{handler},
+	return CaddyRoute{
+		ID:    routeID,
+		Match: []CaddyMatch{{Host: []string{domain}}},
+		Handle: []CaddyHandle{{
+			Handler:   "reverse_proxy",
+			Upstreams: []CaddyUpstream{{Dial: fmt.Sprintf("%s:%s", targetIP, targetPort)}},
+			Transport: transport,
+		}},
 	}
 }
 
-func GenerateTLSPolicyJSON(domain, tlsID string) map[string]interface{} {
-	return map[string]interface{}{
-		"@id":      tlsID,
-		"subjects": []string{domain},
-		"issuers": []map[string]interface{}{
-			{
-				"module":                  "acme",
-				"ca":                      "https://172.20.0.1:9000/acme/acme/directory",
-				"trusted_roots_pem_files": []string{"/etc/caddy/root_ca.crt"},
-				"challenges": map[string]interface{}{
-					"http": map[string]interface{}{
-						"disabled": true,
-					},
-				},
+// GenerateTLSPolicy собирает CaddyTLSPolicy для domain.
+// ACME-issuer указывает на внутренний Step-CA (URL/путь к root CA сейчас
+// захардкожены — будут вынесены в config на этапе 5).
+func GenerateTLSPolicy(domain, tlsID string) CaddyTLSPolicy {
+	return CaddyTLSPolicy{
+		ID:       tlsID,
+		Subjects: []string{domain},
+		Issuers: []CaddyIssuer{{
+			Module: "acme",
+			CA:     "https://172.20.0.1:9000/acme/acme/directory",
+			TrustedRootsPEMFiles: []string{"/etc/caddy/root_ca.crt"},
+			Challenges: CaddyChallenges{
+				HTTP: CaddyHTTPChallenge{Disabled: true},
 			},
-		},
+		}},
 	}
 }
 
 func (c *CaddyClient) DeleteRouteAndTLS(nodeName, routeID, tlsID string) error {
-	baseURL, ok := c.BaseURLs[strings.ToLower(nodeName)]
-	if !ok {
+	baseURL, err := c.baseURLFor(nodeName)
+	if err != nil {
 		return nil
 	}
 
@@ -88,7 +94,7 @@ func (c *CaddyClient) DeleteRouteAndTLS(nodeName, routeID, tlsID string) error {
 	// возвращаем — это компенсационное действие при Deprovision, и fail
 	// одного из двух DELETE не должен блокировать чистку state.
 	for _, id := range []string{routeID, tlsID} {
-		req, err := http.NewRequest("DELETE", fmt.Sprintf("%s/id/%s", baseURL, id), nil)
+		req, err := http.NewRequest("DELETE", caddyIDURL(baseURL, id), nil)
 		if err != nil {
 			fmt.Printf("[CADDY] delete %s: build request: %v\n", id, err)
 			continue
@@ -107,19 +113,19 @@ func (c *CaddyClient) DeleteRouteAndTLS(nodeName, routeID, tlsID string) error {
 }
 
 func (c *CaddyClient) RestartCaddy(nodeName string) error {
-	baseURL, ok := c.BaseURLs[strings.ToLower(nodeName)]
-	if !ok {
-		return fmt.Errorf("URL Caddy не найден для ноды %s", nodeName)
+	baseURL, err := c.baseURLFor(nodeName)
+	if err != nil {
+		return err
 	}
-	fmt.Printf("[CADDY] Рестарт ноды %s (POST /stop)...\n", nodeName)
-	resp, err := http.Post(baseURL+"/stop", "application/json", nil)
+	fmt.Printf("[CADDY] Рестарт ноды %s (POST %s)...\n", nodeName, caddyStop)
+	resp, err := http.Post(baseURL+caddyStop, "application/json", nil)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("POST /stop (%d): %s", resp.StatusCode, string(body))
+		return fmt.Errorf("POST %s (%d): %s", caddyStop, resp.StatusCode, string(body))
 	}
 	return nil
 }
@@ -135,14 +141,17 @@ func (c *CaddyClient) RestartCaddy(nodeName string) error {
 // конфликт ID, истёкший сертификат и т.п.) — тогда ошибка возвращается наверх
 // с понятным сообщением. Первичный 500 до init логируем, чтобы дать след в
 // журнале даже при успешном autorecovery.
-func (c *CaddyClient) upsertByID(baseURL, id, createPath string, payload map[string]interface{}, initIfMissing func() error) error {
-	data, _ := json.Marshal(payload)
+func (c *CaddyClient) upsertByID(baseURL, id, createPath string, payload interface{}, initIfMissing func() error) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal payload: %w", err)
+	}
 
-	getResp, err := c.client.Get(fmt.Sprintf("%s/id/%s", baseURL, id))
-	if err == nil {
+	// GET → если есть, делаем PUT (update).
+	if getResp, gerr := c.client.Get(caddyIDURL(baseURL, id)); gerr == nil {
 		getResp.Body.Close()
 		if getResp.StatusCode == 200 {
-			req, _ := http.NewRequest("PUT", fmt.Sprintf("%s/id/%s", baseURL, id), bytes.NewBuffer(data))
+			req, _ := http.NewRequest("PUT", caddyIDURL(baseURL, id), bytes.NewBuffer(data))
 			req.Header.Set("Content-Type", "application/json")
 			resp, err := c.client.Do(req)
 			if err != nil {
@@ -157,6 +166,7 @@ func (c *CaddyClient) upsertByID(baseURL, id, createPath string, payload map[str
 		}
 	}
 
+	// Нет → POST (create).
 	req, _ := http.NewRequest("POST", baseURL+createPath, bytes.NewBuffer(data))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.client.Do(req)
@@ -196,21 +206,18 @@ func (c *CaddyClient) upsertByID(baseURL, id, createPath string, payload map[str
 }
 
 func (c *CaddyClient) ReplayRoute(nodeName, domain, targetIP, targetPort, protocol, routeID, tlsID string) error {
-	baseURL, ok := c.BaseURLs[strings.ToLower(nodeName)]
-	if !ok {
-		return fmt.Errorf("URL Caddy не найден для ноды %s", nodeName)
+	baseURL, err := c.baseURLFor(nodeName)
+	if err != nil {
+		return err
 	}
 
 	fmt.Printf("[CADDY] Replay %s (%s)...\n", domain, routeID)
 
-	tlsPolicy := GenerateTLSPolicyJSON(domain, tlsID)
+	tlsPolicy := GenerateTLSPolicy(domain, tlsID)
 	initTLS := func() error {
-		initTlsPayload, _ := json.Marshal(map[string]interface{}{
-			"automation": map[string]interface{}{
-				"policies": []interface{}{tlsPolicy},
-			},
-		})
-		req, _ := http.NewRequest("PUT", baseURL+"/config/apps/tls", bytes.NewBuffer(initTlsPayload))
+		payload := caddyAutomationConfig{Automation: caddyAutomation{Policies: []CaddyTLSPolicy{tlsPolicy}}}
+		data, _ := json.Marshal(payload)
+		req, _ := http.NewRequest("PUT", baseURL+caddyPathTLS, bytes.NewBuffer(data))
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := c.client.Do(req)
 		if err != nil {
@@ -219,12 +226,13 @@ func (c *CaddyClient) ReplayRoute(nodeName, domain, targetIP, targetPort, protoc
 		resp.Body.Close()
 		return nil
 	}
-	if err := c.upsertByID(baseURL, tlsID, "/config/apps/tls/automation/policies", tlsPolicy, initTLS); err != nil {
+	if err := c.upsertByID(baseURL, tlsID, caddyPathTLSPolicies, tlsPolicy, initTLS); err != nil {
 		return fmt.Errorf("TLS policy: %w", err)
 	}
 
+	// Добавляем domain в automate-список (выпуск сертификата в фоне).
 	automatePayload, _ := json.Marshal([]string{domain})
-	reqAuth, _ := http.NewRequest("POST", baseURL+"/config/apps/tls/certificates/automate", bytes.NewBuffer(automatePayload))
+	reqAuth, _ := http.NewRequest("POST", baseURL+caddyPathTLSCertAutomate, bytes.NewBuffer(automatePayload))
 	reqAuth.Header.Set("Content-Type", "application/json")
 	respAuth, err := c.client.Do(reqAuth)
 	if err != nil {
@@ -236,13 +244,14 @@ func (c *CaddyClient) ReplayRoute(nodeName, domain, targetIP, targetPort, protoc
 		return fmt.Errorf("automate (%d): %s", respAuth.StatusCode, string(body))
 	}
 
-	routeConfig := GenerateRouteJSON(domain, targetIP, targetPort, protocol, routeID)
+	routeConfig := GenerateRoute(domain, targetIP, targetPort, protocol, routeID)
 	initRoute := func() error {
-		initPayload, _ := json.Marshal(map[string]interface{}{
-			"listen": []string{":443"},
-			"routes": []interface{}{routeConfig},
-		})
-		req, _ := http.NewRequest("PUT", baseURL+"/config/apps/http/servers/srv0", bytes.NewBuffer(initPayload))
+		payload := caddyServerConfig{
+			Listen: []string{caddyHTTPListen},
+			Routes: []CaddyRoute{routeConfig},
+		}
+		data, _ := json.Marshal(payload)
+		req, _ := http.NewRequest("PUT", baseURL+caddyPathHTTPServer, bytes.NewBuffer(data))
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := c.client.Do(req)
 		if err != nil {
@@ -251,7 +260,7 @@ func (c *CaddyClient) ReplayRoute(nodeName, domain, targetIP, targetPort, protoc
 		resp.Body.Close()
 		return nil
 	}
-	if err := c.upsertByID(baseURL, routeID, "/config/apps/http/servers/srv0/routes", routeConfig, initRoute); err != nil {
+	if err := c.upsertByID(baseURL, routeID, caddyPathHTTPServerRoutes, routeConfig, initRoute); err != nil {
 		return fmt.Errorf("route: %w", err)
 	}
 
