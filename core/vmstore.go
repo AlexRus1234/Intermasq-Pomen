@@ -17,70 +17,31 @@
 package core
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 )
 
 // VMStore — потокобезопасный реестр короткоживущих ВМ (vms.json).
 // В отличие от статического config.json, этот файл правится через UI.
 type VMStore struct {
-	path string
-	mu   sync.Mutex
+	*JSONStore[VMConfig]
 }
 
 func NewVMStore(path string) *VMStore {
-	return &VMStore{path: path}
-}
-
-func (s *VMStore) load() ([]VMConfig, error) {
-	data, err := os.ReadFile(s.path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return []VMConfig{}, nil
-		}
-		return nil, err
-	}
-	var vms []VMConfig
-	if err := json.Unmarshal(data, &vms); err != nil {
-		return nil, err
-	}
-	if vms == nil {
-		vms = []VMConfig{}
-	}
-	return vms, nil
-}
-
-func (s *VMStore) save(vms []VMConfig) error {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0750); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(vms, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0660); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
+	return &VMStore{JSONStore: NewJSONStore[VMConfig](path)}
 }
 
 // List возвращает все зарегистрированные ВМ.
 func (s *VMStore) List() ([]VMConfig, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.load()
+	return s.Load()
 }
 
 // Get возвращает ВМ по имени (регистронезависимо).
 func (s *VMStore) Get(name string) (VMConfig, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	mu := s.locker()
+	mu.Lock()
+	defer mu.Unlock()
 	vms, err := s.load()
 	if err != nil {
 		return VMConfig{}, err
@@ -100,8 +61,9 @@ func (s *VMStore) Upsert(vm VMConfig) error {
 	if strings.TrimSpace(vm.Name) == "" {
 		return fmt.Errorf("имя ВМ обязательно")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	mu := s.locker()
+	mu.Lock()
+	defer mu.Unlock()
 	vms, err := s.load()
 	if err != nil {
 		return err
@@ -123,8 +85,9 @@ func (s *VMStore) Upsert(vm VMConfig) error {
 // Delete удаляет ВМ из реестра по имени.
 // Маршруты Caddy/state НЕ трогаются (вариант A: offline-записи чистятся вручную).
 func (s *VMStore) Delete(name string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	mu := s.locker()
+	mu.Lock()
+	defer mu.Unlock()
 	vms, err := s.load()
 	if err != nil {
 		return err

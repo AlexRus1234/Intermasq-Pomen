@@ -17,11 +17,7 @@
 package core
 
 import (
-	"encoding/json"
-	"os"
-	"path/filepath"
 	"slices"
-	"sync"
 	"time"
 )
 
@@ -37,75 +33,33 @@ type RouteRecord struct {
 	UpdatedAt  string `json:"updated_at"`
 }
 
-// StateStore — потокобезопасное хранилище выданных маршрутов (routes.json).
-// Ранее был без мьютекса (в отличие от VMStore), что приводило к data race
-// при параллельных Provision/Replay — см. audit §14.1.
+// StateStore — реестр выданных маршрутов (routes.json). Потокобезопасен
+// через JSONStore. Раньше был без мьютекса — data race при параллельных
+// Provision/Replay (audit §14.1).
 type StateStore struct {
-	path string
-	mu   sync.Mutex
+	*JSONStore[RouteRecord]
 }
 
 func NewStateStore(path string) *StateStore {
-	return &StateStore{path: path}
-}
-
-// load читает routes.json без блокировки — вызывающий код должен держать mu.
-func (s *StateStore) load() ([]RouteRecord, error) {
-	data, err := os.ReadFile(s.path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return []RouteRecord{}, nil
-		}
-		return nil, err
-	}
-	var records []RouteRecord
-	if err := json.Unmarshal(data, &records); err != nil {
-		return nil, err
-	}
-	if records == nil {
-		records = []RouteRecord{}
-	}
-	return records, nil
-}
-
-// save записывает routes.json атомарно (tmp + rename) без блокировки —
-// вызывающий код должен держать mu.
-func (s *StateStore) save(records []RouteRecord) error {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0750); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(records, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0660); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
-}
-
-// Load возвращает все записи. Потокобезопасен.
-func (s *StateStore) Load() ([]RouteRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.load()
+	return &StateStore{JSONStore: NewJSONStore[RouteRecord](path)}
 }
 
 func (s *StateStore) Upsert(rec RouteRecord) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	mu := s.locker()
+	mu.Lock()
+	defer mu.Unlock()
 	records, err := s.load()
 	if err != nil {
 		return err
 	}
+	now := time.Now().Format(time.RFC3339)
 	if rec.UpdatedAt == "" {
-		rec.UpdatedAt = time.Now().Format(time.RFC3339)
+		rec.UpdatedAt = now
 	}
 	found := false
 	for i, r := range records {
 		if r.RouteID == rec.RouteID {
-			rec.UpdatedAt = time.Now().Format(time.RFC3339)
+			rec.UpdatedAt = now
 			records[i] = rec
 			found = true
 			break
@@ -118,8 +72,9 @@ func (s *StateStore) Upsert(rec RouteRecord) error {
 }
 
 func (s *StateStore) Remove(routeID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	mu := s.locker()
+	mu.Lock()
+	defer mu.Unlock()
 	records, err := s.load()
 	if err != nil {
 		return err
