@@ -18,6 +18,7 @@ package core
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 )
@@ -92,6 +93,16 @@ func (e *Engine) GetContainers(vmName string) ([]ContainerInfo, error) {
 // DNS не трогается — wildcard в dnsmasq уже ведёт *.<node>.internal на Caddy.
 //
 // Параметры берутся из ContainerInfo (уже распарсенные labels).
+//
+// Компенсация частичных отказов (audit §14.5):
+//   - Caddy.ReplayRoute → error: ничего не записано, выходим.
+//   - Caddy.RestartCaddy → error: маршрут в Caddy уже настроен, но сертификат
+//     может не примениться. Пытаемся откатить — DeleteRouteAndTLS (best-effort),
+//     возвращаем ошибку. Это не гарантирует полную чистоту (Caddy не
+//     транзакционен), но в штатных случаях спасает от фантомных маршрутов.
+//   - State.Upsert → error: домен фактически уже настроен в Caddy; пишем
+//     в лог warning и возвращаем ошибку. State-файл — источник правды для UI,
+//     пользователь не увидит домен в списке, но сам домен работает.
 func (e *Engine) Provision(c ContainerInfo) (string, error) {
 	if c.Port == "" {
 		return "", fmt.Errorf("у контейнера %s нет label port-XXXX", c.RealName)
@@ -122,7 +133,13 @@ func (e *Engine) Provision(c ContainerInfo) (string, error) {
 	// новый сертификат сразу; /stop надёжнее. Согласованная цена — даунтайм
 	// ~1-2 секунды на ноде.
 	if err := e.Caddy.RestartCaddy(nodeKey); err != nil {
-		return "", fmt.Errorf("Caddy restart: %w", err)
+		// Компенсация: маршрут и TLS-политика уже в Caddy, но без рестарта
+		// сертификат не применён. Пытаемся удалить запись, чтобы UI/state
+		// и Caddy не разошлись. Caddy.DeleteRouteAndTLS — best-effort,
+		// внутренние ошибки логируются в самом методе.
+		slog.Warn("caddy restart failed after ReplayRoute, rolling back route", "node", nodeKey, "route_id", routeID, "err", err)
+		_ = e.Caddy.DeleteRouteAndTLS(nodeKey, routeID, tlsID)
+		return "", fmt.Errorf("Caddy restart (попытка отката выполнена): %w", err)
 	}
 
 	if e.State != nil {
@@ -136,7 +153,14 @@ func (e *Engine) Provision(c ContainerInfo) (string, error) {
 			Node:       nodeKey,
 			VMName:     c.VMName,
 		}); err != nil {
-			return "", fmt.Errorf("state ошибка: %w", err)
+			// Caddy уже настроен и перезапущен — домен РАБОТАЕТ, но мы не
+			// смогли записать факт этого в state. UI не покажет домен;
+			// пользователь может пере-выдать (State.Upsert идемпотентен по
+			// route_id) или вручную добавить запись. Не откатываем Caddy,
+			// чтобы не сломать уже выданный сертификат.
+			slog.Error("state write failed AFTER caddy configured; domain is live but invisible to UI",
+				"domain", domain, "route_id", routeID, "err", err)
+			return "", fmt.Errorf("state ошибка (домен уже активен в Caddy, но не записан в state): %w", err)
 		}
 	}
 
@@ -145,6 +169,12 @@ func (e *Engine) Provision(c ContainerInfo) (string, error) {
 
 // DeprovisionByID удаляет маршрут по routeID (ручная очистка).
 // Не проверяет статус контейнера (offline держим по решению A).
+//
+// Порядок: сначала State.Remove, потом Caddy.DeleteRouteAndTLS. State для нас
+// источник правды — если Caddy-удаление упадёт, запись уже убрана и при
+// следующем Replay не будет воскрешена. Обратный порядок (как было раньше)
+// при сбое state.Remove оставлял бы "висящий" в state маршрут без домена в
+// Caddy, который потом нельзя повторно удалить (Caddy уже пуст).
 func (e *Engine) DeprovisionByID(routeID string) error {
 	if e.State == nil {
 		return fmt.Errorf("state store не инициализирован")
@@ -166,10 +196,14 @@ func (e *Engine) DeprovisionByID(routeID string) error {
 		return fmt.Errorf("маршрут %s не найден", routeID)
 	}
 
-	e.Caddy.DeleteRouteAndTLS(rec.Node, rec.RouteID, rec.TLSID)
 	if err := e.State.Remove(rec.RouteID); err != nil {
 		return fmt.Errorf("state remove: %w", err)
 	}
+	// State уже почищен — Caddy-удаление best-effort. Если оно упадёт, в Caddy
+	// останется фантомный маршрут, но UI/state будет консистентен; при
+	// следующем полном ReplayCaddy фантом не вернётся (его нет в state).
+	// Caddy.DeleteRouteAndTLS логирует ошибки внутри себя.
+	_ = e.Caddy.DeleteRouteAndTLS(rec.Node, rec.RouteID, rec.TLSID)
 	return nil
 }
 
