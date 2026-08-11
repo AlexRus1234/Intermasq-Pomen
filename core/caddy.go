@@ -32,10 +32,13 @@ type CaddyClient struct {
 }
 
 func NewCaddyClient(urls map[string]string) *CaddyClient {
+	// Копируем map и триммим '/' — НЕ мутируем входной map вызывающего кода
+	// (audit §14.7: побочный эффект, трудно отлаживать).
+	trimmed := make(map[string]string, len(urls))
 	for k, v := range urls {
-		urls[k] = strings.TrimRight(v, "/")
+		trimmed[k] = strings.TrimRight(v, "/")
 	}
-	return &CaddyClient{BaseURLs: urls, client: &http.Client{Timeout: 10 * time.Second}}
+	return &CaddyClient{BaseURLs: trimmed, client: &http.Client{Timeout: 10 * time.Second}}
 }
 
 func GenerateRouteJSON(domain, targetIP, targetPort, protocol, routeID string) map[string]interface{} {
