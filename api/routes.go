@@ -23,12 +23,18 @@ import (
 	"strings"
 )
 
-type ApiServer struct {
+// Server — HTTP API Pomen: оборачивает Engine и регистрирует его обработчики
+// на http.ServeMux через Register.
+//
+// Раньше назывался ApiServer — нарушал Go-конвенцию для аббревиатур
+// (initialisms должны быть ALLCAPS: API, не Api). Переименовано в Server
+// (audit §14.23): в контексте пакета api этого достаточно и читается естественно.
+type Server struct {
 	Engine *core.Engine
 }
 
-func NewApiServer(e *core.Engine) *ApiServer {
-	return &ApiServer{Engine: e}
+func NewServer(e *core.Engine) *Server {
+	return &Server{Engine: e}
 }
 
 // VMView — публичное представление ВМ без секретов.
@@ -59,12 +65,12 @@ func jsonError(w http.ResponseWriter, status int, message string) {
 // === Реестр ВМ (CRUD) ===
 
 // HandleNodes: GET /api/nodes — список ключей нод из config.json (для дропдауна UI).
-func (s *ApiServer) HandleNodes(w http.ResponseWriter, r *http.Request) {
+func (s *Server) HandleNodes(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, s.Engine.ListNodes())
 }
 
 // HandleVMs: GET — список, POST — добавить/обновить.
-func (s *ApiServer) HandleVMs(w http.ResponseWriter, r *http.Request) {
+func (s *Server) HandleVMs(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		vms, err := s.Engine.ListVMs()
@@ -101,7 +107,7 @@ func (s *ApiServer) HandleVMs(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleDeleteVM: DELETE /api/vms/:name
-func (s *ApiServer) HandleDeleteVM(w http.ResponseWriter, r *http.Request) {
+func (s *Server) HandleDeleteVM(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		jsonError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
@@ -122,7 +128,7 @@ func (s *ApiServer) HandleDeleteVM(w http.ResponseWriter, r *http.Request) {
 // === Контейнеры (on-demand pull) ===
 
 // HandleGetContainers: GET /api/containers?vm=<name>
-func (s *ApiServer) HandleGetContainers(w http.ResponseWriter, r *http.Request) {
+func (s *Server) HandleGetContainers(w http.ResponseWriter, r *http.Request) {
 	vm := r.URL.Query().Get("vm")
 	if vm == "" {
 		jsonError(w, http.StatusBadRequest, "Параметр vm обязателен")
@@ -140,7 +146,7 @@ func (s *ApiServer) HandleGetContainers(w http.ResponseWriter, r *http.Request) 
 
 // HandleProvision: POST {vm, container_name}
 // Контейнер ищется в свежем списке от вебхука ВМ (чтобы гарантировать актуальный IP/порт).
-func (s *ApiServer) HandleProvision(w http.ResponseWriter, r *http.Request) {
+func (s *Server) HandleProvision(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		VMName        string `json:"vm"`
 		ContainerName string `json:"container_name"`
@@ -181,7 +187,7 @@ func (s *ApiServer) HandleProvision(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleDeprovision — оставлен для совместимости (POST {route_id}).
-func (s *ApiServer) HandleDeprovision(w http.ResponseWriter, r *http.Request) {
+func (s *Server) HandleDeprovision(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		RouteID string `json:"route_id"`
 	}
@@ -201,7 +207,7 @@ func (s *ApiServer) HandleDeprovision(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleDeprovisionByID: DELETE /api/deprovision/:routeID
-func (s *ApiServer) HandleDeprovisionByID(w http.ResponseWriter, r *http.Request) {
+func (s *Server) HandleDeprovisionByID(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		jsonError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
@@ -220,7 +226,7 @@ func (s *ApiServer) HandleDeprovisionByID(w http.ResponseWriter, r *http.Request
 }
 
 // HandleGetState: GET /api/state
-func (s *ApiServer) HandleGetState(w http.ResponseWriter, r *http.Request) {
+func (s *Server) HandleGetState(w http.ResponseWriter, r *http.Request) {
 	records, err := s.Engine.GetState()
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
@@ -230,7 +236,7 @@ func (s *ApiServer) HandleGetState(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleReplay: POST /api/replay
-func (s *ApiServer) HandleReplay(w http.ResponseWriter, r *http.Request) {
+func (s *Server) HandleReplay(w http.ResponseWriter, r *http.Request) {
 	ok, errs, err := s.Engine.ReplayCaddy()
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())

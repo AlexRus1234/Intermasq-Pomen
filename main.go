@@ -84,22 +84,10 @@ func main() {
 
 	engine := core.NewEngine(caddyClient, stateStore, vmStore, webhookClient, cfg.BaseDomain, cfg.Nodes)
 
-	apiServer := api.NewApiServer(engine)
-
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	api.Register(mux, engine, func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, "index.html")
 	})
-
-	mux.HandleFunc("/api/nodes", apiServer.HandleNodes)
-	mux.HandleFunc("/api/vms", apiServer.HandleVMs)
-	mux.HandleFunc("/api/vms/", apiServer.HandleDeleteVM)
-	mux.HandleFunc("/api/containers", apiServer.HandleGetContainers)
-	mux.HandleFunc("/api/provision", apiServer.HandleProvision)
-	mux.HandleFunc("/api/deprovision", apiServer.HandleDeprovision)
-	mux.HandleFunc("/api/deprovision/", apiServer.HandleDeprovisionByID)
-	mux.HandleFunc("/api/state", apiServer.HandleGetState)
-	mux.HandleFunc("/api/replay", apiServer.HandleReplay)
 
 	socketPath := os.Getenv("PLUGIN_SOCKET")
 	devPort := os.Getenv("POMEN_DEV_PORT")
