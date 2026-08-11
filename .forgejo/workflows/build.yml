@@ -1,0 +1,375 @@
+# Pomen - plugin for Intermasq
+# Copyright (C) 2026 AlexRus1234
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+name: Build and Test Pomen
+
+# Пайплайн сознательно повторяет структуру материнского Intermasq
+# (.forgejo/workflows/build.yml) 1-в-1, чтобы быть отработанным и предсказуемым.
+# Шаги, специфичные для матери (frontend build, mock plugin, dnsmasq compat
+# matrix, lab ISO, L5 real VM), опущены; шаги smoke / fuzz / perf / e2e оставлены
+# закомментированными заглушками — они будут активированы на этапе тестирования.
+
+on:
+  workflow_dispatch:
+    inputs:
+      push_to_registry:
+        description: "Upload binary to Forgejo Packages and Release on success?"
+        required: true
+        default: false
+        type: boolean
+      publish_github:
+        description: "Create GitHub Release and upload binary assets?"
+        required: true
+        default: false
+        type: boolean
+      publish_codeberg:
+        description: "Create Codeberg Release and upload binary assets?"
+        required: true
+        default: false
+        type: boolean
+      version_tag:
+        description: "Fallback version when HEAD has no exact v* tag."
+        required: false
+        default: ""
+        type: string
+      run_race_tests:
+        description: "Run go test with -race (slower, more thorough)?"
+        required: true
+        default: true
+        type: boolean
+      run_perf_tests:
+        description: "Run perf/stress scenarios (tests/perf.sh)? Adds ~1-2 min; opt-in."
+        required: true
+        default: false
+        type: boolean
+      run_e2e_tests:
+        description: "Run Playwright E2E (tests/e2e)? Installs chromium; opt-in."
+        required: true
+        default: false
+        type: boolean
+      run_fuzz_tests:
+        description: "Run Go fuzz targets (each 30s, opt-in)?"
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  build-test:
+    runs-on: docker
+    container:
+      image: fedora:44
+    env:
+      # All external dependencies via Nora where possible
+      GOPROXY: "https://nora.panelka.yadr01.internal/go,direct"
+      GOSUMDB: "off"
+      GOPRIVATE: "git.yadr00.internal/*"
+      # NOTE: do NOT set SSL_CERT_FILE / NODE_EXTRA_CA_CERTS to step-ca.crt
+      # directly — that overrides the system bundle and breaks public-CA
+      # trust (curl to go.dev / npm / etc fails with "unexpected end of file").
+      # The 'update-ca-trust' step adds step-ca to the system bundle, after
+      # which all tools trust both public CAs AND step-ca transparently.
+      # Static test secret — only valid inside the CI job, never reuse in prod
+      INTERMASQ_SECRET: "ci-test-secret-32-bytes-pad-XXXXXXXX"
+
+    steps:
+      - name: Install git first (minimal fedora image lacks it)
+        run: dnf install -y --setopt=install_weak_deps=False git curl
+
+      - name: Trust Local CA
+        run: |
+          curl -k https://172.20.0.1:9000/roots.pem -o /etc/pki/ca-trust/source/anchors/step-ca.crt
+          update-ca-trust
+          git config --global http.sslCAInfo /etc/pki/ca-trust/source/anchors/step-ca.crt
+
+      - name: Configure Nora RPM repo (custom packages if needed)
+        run: |
+          cat > /etc/yum.repos.d/nora.repo << 'EOF'
+          [nora-runner]
+          name=Nora Runner Dependencies
+          baseurl=https://nora.panelka.yadr01.internal/rpm/runner/
+          gpgcheck=0
+          enabled=1
+          priority=1
+          sslverify=1
+          EOF
+
+      - name: Install remaining system dependencies
+        # NOTE: no `dnsmasq` here (mother installs it) — Pomen does not manage
+        # dnsmasq directly; DNS for *.internal is a wildcard solved by Caddy.
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            bash tar \
+            nodejs npm \
+            jq \
+            gcc
+
+      - name: Install Go toolchain
+        run: |
+          # Fedora 44 ships Go 1.24; pomen needs 1.25+. Tarball from go.dev.
+          # -f: fail on HTTP errors (don't pipe HTML error page into tar)
+          # Download first, then extract, so we get a clear error if URL is wrong.
+          curl -fsSL https://go.dev/dl/go1.26.0.linux-amd64.tar.gz -o /tmp/go.tar.gz
+          ls -lh /tmp/go.tar.gz
+          tar -C /usr/local -xzf /tmp/go.tar.gz
+          echo "/usr/local/go/bin" >> $GITHUB_PATH
+          /usr/local/go/bin/go version
+
+      - name: Configure npm registry to Nora
+        run: npm config set registry https://nora.panelka.yadr01.internal/npm/
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Run the manual workflow from the selected tag/ref and keep tags
+          # available for exact version detection below.
+          fetch-depth: 0
+
+      - name: Determine build version
+        env:
+          VERSION_INPUT: ${{ github.event.inputs.version_tag }}
+          SHA: ${{ github.sha }}
+        run: |
+          TAG_VERSION="$(git describe --exact-match --tags --match='v*' HEAD 2>/dev/null || true)"
+          if [ -n "$TAG_VERSION" ]; then
+            VERSION="$TAG_VERSION"
+            echo "Using exact Git tag: $VERSION"
+          elif [ -n "$VERSION_INPUT" ]; then
+            VERSION="$VERSION_INPUT"
+            echo "HEAD has no exact v* tag; using workflow input: $VERSION"
+          else
+            VERSION="sha-${SHA:0:8}"
+            echo "HEAD has no exact v* tag and no input; using: $VERSION"
+          fi
+
+          case "$VERSION" in
+            v[0-9]*|sha-[0-9a-f]*) ;;
+            *) echo "::error::invalid version '$VERSION' (expected v* or sha-<hex>)"; exit 1 ;;
+          esac
+
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "APP_VERSION=${VERSION#v}" >> "$GITHUB_ENV"
+          echo "EXACT_TAG=$TAG_VERSION" >> "$GITHUB_ENV"
+
+      # NOTE: no "Build frontend" step here — Pomen ships index.html inline,
+      # there is no separate frontend/ Vite project to compile.
+
+      - name: Build binary
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+          go build -trimpath \
+            -ldflags="-s -w -X pomen/internal/version.Version=${APP_VERSION}" \
+            -o pomen-ci .
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: gofmt check
+        run: |
+          FMT_OUT="$(gofmt -l .)"
+          if [ -n "$FMT_OUT" ]; then
+            echo "::error::Files need gofmt:"
+            echo "$FMT_OUT"
+            exit 1
+          fi
+
+      - name: L1 + L2 — Go tests (unit + integration)
+        env:
+          RACEFLAG: ${{ github.event.inputs.run_race_tests == 'true' && '-race' || '' }}
+          # -race requires CGO (and gcc). The binary itself is built with
+          # CGO_ENABLED=0 for static linking; tests opt back in here.
+          CGO_ENABLED: "1"
+        run: |
+          echo "Running: go test ./... $RACEFLAG -count=1"
+          go test ./... $RACEFLAG -count=1
+
+      # TODO(testing-stage): re-enable Fuzz once Pomen has fuzz targets
+      # (e.g. for webhook container name normalization or Caddy JSON builders).
+      # The mother's step is bound to specific FuzzXxx names that don't exist
+      # in Pomen yet; copy the pattern from Intermasq's build.yml when adding.
+      #
+      # - name: Fuzz parsers (opt-in, time-bounded)
+      #   if: success() && github.event.inputs.run_fuzz_tests == 'true'
+      #   env:
+      #     CGO_ENABLED: "1"
+      #   run: |
+      #     declare -A FUZZ_PKG=( ... )
+      #     ...
+
+      - name: Coverage report
+        # Separate step (no -race) so instrumentation overhead & race detector
+        # don't skew numbers. Prints per-function coverage and the summary
+        # percentage to the CI log, and uploads coverage.out as an artifact.
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          go test ./... -count=1 -coverprofile coverage.out
+          echo "===== Coverage summary ====="
+          go tool cover -func coverage.out | tail -n 1
+          echo "===== Per-package ====="
+          go tool cover -func coverage.out | grep -E '^pomen/' | sort
+
+      # NOTE: no "Build & install mock plugin" step — that fixture exists in
+      # Intermasq to exercise the plugin-loading contract from the host side.
+      # Pomen is itself a plugin; it is exercised by the host's CI instead.
+
+      # TODO(testing-stage): wire L3 smoke once tests/suites/ + tests/smoke.sh
+      # exist and Pomen has a dev-mode launch path for CI (currently it runs
+      # only behind a PLUGIN_SOCKET owned by Intermasq). Mirror the mother's
+      # "L3 — smoke tests against running binary" step then.
+      #
+      # - name: L3 — smoke tests against running binary
+      #   run: |
+      #     ...
+      #     BASE=http://localhost:18XXX ./tests/smoke.sh
+
+      # NOTE: no L3.5 dnsmasq compat matrix — Pomen has no dnsmasq dependency.
+
+      # TODO(testing-stage): perf scenarios (tests/perf.sh).
+      #
+      # - name: Perf/stress scenarios (opt-in)
+      #   if: success() && github.event.inputs.run_perf_tests == 'true'
+      #   run: |
+      #     ...
+
+      # TODO(testing-stage): Playwright E2E once tests/e2e/ exists. Pomen's UI
+      # is a single inline index.html rendered inside the Intermasq iframe;
+      # E2E will need either a dev-mode HTTP port or the host panel running.
+      #
+      # - name: L4 — Playwright E2E (opt-in)
+      #   if: success() && github.event.inputs.run_e2e_tests == 'true'
+      #   run: |
+      #     ...
+
+      # NOTE: no L5 Real VM — Pomen does not manage init systems; that level
+      # of testing belongs to the Intermasq host.
+
+      - name: Show binary info
+        run: |
+          ls -lh pomen-ci
+          ./pomen-ci --version || true
+          ARTIFACT_NAME="pomen-${VERSION}-linux-amd64"
+          cp pomen-ci "$ARTIFACT_NAME"
+          sha256sum "$ARTIFACT_NAME" | tee "${ARTIFACT_NAME}.sha256"
+
+      # NOTE: no "Build lab ISO" step — Pomen has no ISO artefact.
+
+      - name: Publish to Forgejo Packages
+        if: success() && github.event.inputs.push_to_registry == 'true'
+        env:
+          UPLOAD_TOKEN: ${{ secrets.UPLOAD_TOKEN }}
+        run: |
+          echo "Publishing as version: $VERSION"
+          ARTIFACT_NAME="pomen-${VERSION}-linux-amd64"
+
+          # Бинарник + его sha256 — всегда; ISO/доп. артефактов у Pomen нет.
+          PUBLISH_FILES="$ARTIFACT_NAME ${ARTIFACT_NAME}.sha256"
+          echo "Files to publish: $PUBLISH_FILES"
+
+          # Generic package registry: каждый файл по своему пути.
+          for FILE in $PUBLISH_FILES; do
+            curl -fSR --cacert /etc/pki/ca-trust/source/anchors/step-ca.crt \
+                 --user "alexrus:${UPLOAD_TOKEN}" \
+                 --upload-file "./${FILE}" \
+                 "https://git.yadr00.internal/api/packages/AlexRus1234/generic/pomen/${VERSION}/${FILE}"
+          done
+          echo "Published Forgejo packages: $PUBLISH_FILES"
+
+          API="https://git.yadr00.internal/api/v1/repos/AlexRus1234/Intermasq-Pomen"
+          RELEASE_ID="$(curl -fsSL --user "alexrus:${UPLOAD_TOKEN}" \
+            "$API/releases/tags/${VERSION}" 2>/dev/null | jq -r '.id // empty' 2>/dev/null || true)"
+          if [ -z "$RELEASE_ID" ]; then
+            BODY="$(jq -n --arg tag "$VERSION" '{tag_name:$tag, name:$tag, draft:false, prerelease:($tag | test("-"))}')"
+            RELEASE="$(curl -fsSL -X POST \
+              --user "alexrus:${UPLOAD_TOKEN}" \
+              -H 'Content-Type: application/json' \
+              "$API/releases" -d "$BODY")"
+            RELEASE_ID="$(jq -r '.id' <<<"$RELEASE")"
+            test -n "$RELEASE_ID" && test "$RELEASE_ID" != "null"
+          else
+            echo "Release ${VERSION} already exists (id=${RELEASE_ID}), reusing"
+          fi
+          for FILE in $PUBLISH_FILES; do
+            curl -fsSL -X POST \
+              --user "alexrus:${UPLOAD_TOKEN}" \
+              -F "attachment=@${FILE}" \
+              "$API/releases/${RELEASE_ID}/assets?name=${FILE}"
+          done
+          echo "Published local Forgejo Release ${VERSION}"
+
+      - name: Publish GitHub Release
+        if: success() && github.event.inputs.publish_github == 'true'
+        env:
+          RELEASE_TOKEN: ${{ secrets.TOKEN_GITHUB }}
+        run: |
+          if [ "$EXACT_TAG" != "$VERSION" ]; then
+            echo "::error::GitHub Release requires HEAD to have the exact tag $VERSION"
+            exit 1
+          fi
+          ARTIFACT_NAME="pomen-${VERSION}-linux-amd64"
+          PUBLISH_FILES="$ARTIFACT_NAME ${ARTIFACT_NAME}.sha256"
+          echo "Files to publish: $PUBLISH_FILES"
+          API="https://api.github.com/repos/AlexRus1234/Intermasq-Pomen"
+          BODY="$(jq -n --arg tag "$VERSION" '{tag_name:$tag, name:$tag, draft:false, prerelease:($tag | test("-"))}')"
+          RELEASE="$(curl -fsSL -X POST \
+            -H "Authorization: Bearer ${RELEASE_TOKEN}" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'Content-Type: application/json' \
+            "$API/releases" -d "$BODY")"
+          UPLOAD_URL="$(jq -r '.upload_url' <<<"$RELEASE" | sed 's/{?name,label}//')"
+          test -n "$UPLOAD_URL" && test "$UPLOAD_URL" != "null"
+          for FILE in $PUBLISH_FILES; do
+            curl -fsSL -X POST \
+              -H "Authorization: Bearer ${RELEASE_TOKEN}" \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'Content-Type: application/octet-stream' \
+              --data-binary "@${FILE}" \
+              "${UPLOAD_URL}?name=${FILE}"
+          done
+          echo "Published GitHub Release ${VERSION} (files: $PUBLISH_FILES)"
+
+      - name: Publish Codeberg Release
+        if: success() && github.event.inputs.publish_codeberg == 'true'
+        env:
+          RELEASE_TOKEN: ${{ secrets.TOKEN_CODEBERG }}
+        run: |
+          if [ "$EXACT_TAG" != "$VERSION" ]; then
+            echo "::error::Codeberg Release requires HEAD to have the exact tag $VERSION"
+            exit 1
+          fi
+          ARTIFACT_NAME="pomen-${VERSION}-linux-amd64"
+          PUBLISH_FILES="$ARTIFACT_NAME ${ARTIFACT_NAME}.sha256"
+          echo "Files to publish: $PUBLISH_FILES"
+          API="https://codeberg.org/api/v1/repos/AlexRus1234/Intermasq-Pomen"
+          BODY="$(jq -n --arg tag "$VERSION" '{tag_name:$tag, name:$tag, draft:false, prerelease:($tag | test("-"))}')"
+          RELEASE="$(curl -fsSL -X POST \
+            -H "Authorization: token ${RELEASE_TOKEN}" \
+            -H 'Content-Type: application/json' \
+            "$API/releases" -d "$BODY")"
+          RELEASE_ID="$(jq -r '.id' <<<"$RELEASE")"
+          test -n "$RELEASE_ID" && test "$RELEASE_ID" != "null"
+          for FILE in $PUBLISH_FILES; do
+            curl -fsSL -X POST \
+              -H "Authorization: token ${RELEASE_TOKEN}" \
+              -F "attachment=@${FILE}" \
+              "$API/releases/${RELEASE_ID}/assets?name=${FILE}"
+          done
+          echo "Published Codeberg Release ${VERSION} (files: $PUBLISH_FILES)"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -f pomen-ci \
+                pomen-*linux-amd64 pomen-*linux-amd64.sha256

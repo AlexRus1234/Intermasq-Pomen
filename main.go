@@ -18,6 +18,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -26,6 +27,7 @@ import (
 	"os/signal"
 	"pomen/api"
 	"pomen/core"
+	"pomen/internal/version"
 	"syscall"
 )
 
@@ -45,6 +47,14 @@ func loadConfig(path string) (*Config, error) {
 }
 
 func main() {
+	showVersion := flag.Bool("version", false, "print build version and exit")
+	flag.Parse()
+
+	if *showVersion {
+		fmt.Println("pomen", version.Version)
+		return
+	}
+
 	cfg, err := loadConfig("config.json")
 	if err != nil {
 		log.Fatalf("Ошибка чтения config.json: %v", err)
@@ -106,11 +116,11 @@ func main() {
 			os.Exit(1)
 		}()
 
-		fmt.Printf("Pomen started on unix socket: %s\n", socketPath)
+		fmt.Printf("Pomen %s started on unix socket: %s\n", version.Version, socketPath)
 		os.Chmod(socketPath, 0770)
 		http.Serve(listener, mux)
 	} else {
-		fmt.Printf("Pomen started on TCP :5001\n")
+		fmt.Printf("Pomen %s started on TCP :5001\n", version.Version)
 		log.Fatal(http.ListenAndServe(":5001", mux))
 	}
 }
