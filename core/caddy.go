@@ -75,8 +75,8 @@ func GenerateTLSPolicy(tlsCfg TLSConfig, domain, tlsID string) CaddyTLSPolicy {
 		ID:       tlsID,
 		Subjects: []string{domain},
 		Issuers: []CaddyIssuer{{
-			Module: "acme",
-			CA:     tlsCfg.ACMECA,
+			Module:               "acme",
+			CA:                   tlsCfg.ACMECA,
 			TrustedRootsPEMFiles: []string{tlsCfg.RootCAPath},
 			Challenges: CaddyChallenges{
 				HTTP: CaddyHTTPChallenge{Disabled: true},

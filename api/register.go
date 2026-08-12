@@ -29,10 +29,12 @@ import (
 //
 // uiHandler — обработчик корня "/" (index.html, embedнутый в бинарь).
 // Передаётся снаружи, чтобы api-пакет не зависел от //go:embed в main.
-func Register(mux *http.ServeMux, engine *core.Engine, uiHandler http.HandlerFunc) {
-	s := NewServer(engine)
+// version — строка версии сборки (для /api/version).
+func Register(mux *http.ServeMux, engine *core.Engine, version string, uiHandler http.HandlerFunc) {
+	s := NewServer(engine, version)
 
 	mux.HandleFunc("/", uiHandler)
+	mux.HandleFunc("/api/version", s.HandleVersion)
 	mux.HandleFunc("/api/nodes", s.HandleNodes)
 	mux.HandleFunc("/api/vms", s.HandleVMs)
 	mux.HandleFunc("/api/vms/", s.HandleDeleteVM)

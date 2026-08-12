@@ -30,11 +30,12 @@ import (
 // (initialisms должны быть ALLCAPS: API, не Api). Переименовано в Server
 // (audit §14.23): в контексте пакета api этого достаточно и читается естественно.
 type Server struct {
-	Engine *core.Engine
+	Engine  *core.Engine
+	Version string
 }
 
-func NewServer(e *core.Engine) *Server {
-	return &Server{Engine: e}
+func NewServer(e *core.Engine, version string) *Server {
+	return &Server{Engine: e, Version: version}
 }
 
 // VMView — публичное представление ВМ без секретов.
@@ -246,4 +247,11 @@ func (s *Server) HandleReplay(w http.ResponseWriter, r *http.Request) {
 		"ok":     ok,
 		"errors": errs,
 	})
+}
+
+// HandleVersion: GET /api/version — отдаёт версию сборки (из internal/version,
+// в CI перекрывается через -ldflags). Используется UI для отображения и
+// диагностическими скриптами для проверки, что запущен ожидаемый билд.
+func (s *Server) HandleVersion(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, http.StatusOK, map[string]string{"version": s.Version})
 }

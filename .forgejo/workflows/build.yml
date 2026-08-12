@@ -168,6 +168,14 @@ jobs:
 
       - name: Build binary
         run: |
+          # Sync version into manifest.json so the deployed plugin advertises
+          # the same version as the binary itself (internal/version is injected
+          # via -ldflags below). jq round-trip preserves key order and indent.
+          tmp="$(mktemp)"
+          jq --arg v "${APP_VERSION}" '.version = $v' manifest.json > "$tmp" && mv "$tmp" manifest.json
+          echo "manifest.json:"
+          cat manifest.json
+
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
           go build -trimpath \
             -ldflags="-s -w -X pomen/internal/version.Version=${APP_VERSION}" \

@@ -126,7 +126,7 @@ func main() {
 	})
 
 	mux := http.NewServeMux()
-	api.Register(mux, engine, webUIHandler())
+	api.Register(mux, engine, version.Version, webUIHandler())
 
 	socketPath := os.Getenv("PLUGIN_SOCKET")
 	devPort := os.Getenv("POMEN_DEV_PORT")

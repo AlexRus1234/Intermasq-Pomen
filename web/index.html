@@ -28,7 +28,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 </head>
 <body class="bg-body-tertiary">
     <div id="app" class="container-fluid px-4 mt-4">
-        <h2 class="fw-bold text-primary mb-4">🏷️ Pomen — выдача доменов контейнерам Podman</h2>
+        <h2 class="fw-bold text-primary mb-4">
+            🏷️ Pomen
+            <span class="text-muted small fw-normal" v-if="pomenVersion">v{{ pomenVersion }}</span>
+            <span class="text-muted small fw-normal" v-else>выдача доменов контейнерам Podman</span>
+        </h2>
 
         <ul class="nav nav-tabs mb-4">
             <li class="nav-item">
@@ -191,6 +195,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
                 Удаление — ручная очистка offline-записей.
             </p>
         </div>
+
+        <footer class="text-center text-muted small mt-4 mb-3" v-if="pomenVersion">
+            Pomen v{{ pomenVersion }}
+        </footer>
     </div>
 
     <script src="app.js"></script>

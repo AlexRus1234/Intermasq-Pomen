@@ -66,6 +66,7 @@ createApp({
         const replaying = ref(false)
         const nodeNames = ref([])
         const newVM = ref({ name: '', node: '', ip: '', webhook_url: '', secret: '' })
+        const pomenVersion = ref('')
 
         const canAddVM = computed(() =>
             newVM.value.name && newVM.value.node && newVM.value.ip && newVM.value.webhook_url
@@ -157,15 +158,23 @@ createApp({
             } catch(e) { console.error('nodes недоступен', e) }
         }
 
+        async function loadVersion() {
+            try {
+                const res = await api.get('/api/version')
+                pomenVersion.value = res.data?.version || ''
+            } catch(e) { /* version is informational, ignore errors */ }
+        }
+
         onMounted(() => {
             loadVMs()
             loadState()
             loadNodes()
+            loadVersion()
         })
 
         return {
             tab, vms, state, containers, selectedVM, provisioning, replaying,
-            nodeNames, newVM, canAddVM, domainExample,
+            nodeNames, newVM, canAddVM, domainExample, pomenVersion,
             loadVMs, addVM, deleteVM, loadContainers, provision, loadState, deprovision, replayCaddy
         }
     }
