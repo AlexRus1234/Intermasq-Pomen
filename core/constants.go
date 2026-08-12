@@ -41,6 +41,16 @@ const (
 	DefaultVMSecretHeader = "X-VM-Secret"
 )
 
+// Дефолты для TLS-config (раньше были захардкожены в config.go —
+// audit §5). Перекрываются полями tls.* в config.json.
+const (
+	// DefaultACMECA — URL ACME-директории внутреннего Step-CA.
+	DefaultACMECA = "https://172.20.0.1:9000/acme/acme/directory"
+
+	// DefaultRootCAPath — путь к root CA PEM на ноде Caddy.
+	DefaultRootCAPath = "/etc/caddy/root_ca.crt"
+)
+
 // Шаблоны идентификаторов и доменов. Раньше захардкожены в Engine.Provision
 // (audit §5). Параметры: vm, name, node.
 const (

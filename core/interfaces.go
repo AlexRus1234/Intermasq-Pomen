@@ -24,7 +24,7 @@ package core
 type CaddyAPI interface {
 	ReplayRoute(nodeName, domain, targetIP, targetPort, protocol, routeID, tlsID string) error
 	RestartCaddy(nodeName string) error
-	DeleteRouteAndTLS(nodeName, routeID, tlsID string) error
+	DeleteRouteAndTLS(nodeName, routeID, tlsID string)
 }
 
 // WebhookAPI — поверхность WebhookClient, используемая Engine.

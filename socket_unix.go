@@ -19,6 +19,7 @@
 package main
 
 import (
+	"log/slog"
 	"net"
 	"os"
 	"syscall"
@@ -33,6 +34,7 @@ import (
 //
 // os.Chmod after Listen is a defensive fallback: some FS/kernel combos
 // honour umask differently, and an explicit chmod makes the intent visible.
+// A chmod failure is logged via slog but does not abort (socket is usable).
 func listenUnix(path string) (net.Listener, error) {
 	os.Remove(path)
 	oldUmask := syscall.Umask(0o007)
@@ -42,8 +44,8 @@ func listenUnix(path string) (net.Listener, error) {
 		return nil, err
 	}
 	if err := os.Chmod(path, 0770); err != nil {
-		// Non-fatal: socket already listens.
-		_ = err // logged by caller
+		// Non-fatal: socket already listens, but expected mode could not be set.
+		slog.Warn("unix socket chmod failed", "path", path, "err", err)
 	}
 	return listener, nil
 }

@@ -83,6 +83,10 @@ func jsonError(w http.ResponseWriter, status int, message string) {
 
 // HandleNodes: GET /api/nodes — список ключей нод из config.json (для дропдауна UI).
 func (s *Server) HandleNodes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
 	jsonResponse(w, http.StatusOK, s.Engine.ListNodes())
 }
 
@@ -146,6 +150,10 @@ func (s *Server) HandleDeleteVM(w http.ResponseWriter, r *http.Request) {
 
 // HandleGetContainers: GET /api/containers?vm=<name>
 func (s *Server) HandleGetContainers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
 	vm := r.URL.Query().Get("vm")
 	if vm == "" {
 		jsonError(w, http.StatusBadRequest, "Параметр vm обязателен")
@@ -164,6 +172,10 @@ func (s *Server) HandleGetContainers(w http.ResponseWriter, r *http.Request) {
 // HandleProvision: POST {vm, container_name}
 // Контейнер ищется в свежем списке от вебхука ВМ (чтобы гарантировать актуальный IP/порт).
 func (s *Server) HandleProvision(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
 	var req struct {
 		VMName        string `json:"vm"`
 		ContainerName string `json:"container_name"`
@@ -205,6 +217,10 @@ func (s *Server) HandleProvision(w http.ResponseWriter, r *http.Request) {
 
 // HandleDeprovision — оставлен для совместимости (POST {route_id}).
 func (s *Server) HandleDeprovision(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
 	var req struct {
 		RouteID string `json:"route_id"`
 	}
@@ -244,6 +260,10 @@ func (s *Server) HandleDeprovisionByID(w http.ResponseWriter, r *http.Request) {
 
 // HandleGetState: GET /api/state
 func (s *Server) HandleGetState(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
 	records, err := s.Engine.GetState()
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
@@ -254,6 +274,10 @@ func (s *Server) HandleGetState(w http.ResponseWriter, r *http.Request) {
 
 // HandleReplay: POST /api/replay
 func (s *Server) HandleReplay(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
 	ok, errs, err := s.Engine.ReplayCaddy()
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
@@ -269,5 +293,9 @@ func (s *Server) HandleReplay(w http.ResponseWriter, r *http.Request) {
 // в CI перекрывается через -ldflags). Используется UI для отображения и
 // диагностическими скриптами для проверки, что запущен ожидаемый билд.
 func (s *Server) HandleVersion(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
 	jsonResponse(w, http.StatusOK, map[string]string{"version": s.Version})
 }

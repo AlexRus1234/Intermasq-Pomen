@@ -29,9 +29,8 @@ type Config struct {
 }
 
 // TLSConfig — параметры ACME-issuer'а, который Caddy использует для
-// выпуска сертификатов. До этого были захардкожены в GenerateTLSPolicy
-// (audit §5: "https://172.20.0.1:9000/acme/acme/directory",
-// "/etc/caddy/root_ca.crt").
+// выпуска сертификатов. Дефолты — в constants.go (DefaultACMECA,
+// DefaultRootCAPath); до рефакторинга были захардкожены (audit §5).
 type TLSConfig struct {
 	ACMECA     string `json:"acme_ca"`      // ACME directory URL
 	RootCAPath string `json:"root_ca_path"` // путь к root CA PEM на ноде Caddy
@@ -73,10 +72,10 @@ func (cfg Config) WithDefaults() ResolvedConfig {
 		RestartDelayDur: DefaultRestartDelay,
 	}
 	if r.TLS.ACMECA == "" {
-		r.TLS.ACMECA = "https://172.20.0.1:9000/acme/acme/directory"
+		r.TLS.ACMECA = DefaultACMECA
 	}
 	if r.TLS.RootCAPath == "" {
-		r.TLS.RootCAPath = "/etc/caddy/root_ca.crt"
+		r.TLS.RootCAPath = DefaultRootCAPath
 	}
 	if d, err := time.ParseDuration(r.Timeouts.Caddy); err == nil {
 		r.CaddyTimeout = d

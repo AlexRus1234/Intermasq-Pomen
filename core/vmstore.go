@@ -39,9 +39,8 @@ func (s *VMStore) List() ([]VMConfig, error) {
 
 // Get возвращает ВМ по имени (регистронезависимо).
 func (s *VMStore) Get(name string) (VMConfig, error) {
-	mu := s.locker()
-	mu.Lock()
-	defer mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	vms, err := s.load()
 	if err != nil {
 		return VMConfig{}, err
@@ -61,9 +60,8 @@ func (s *VMStore) Upsert(vm VMConfig) error {
 	if strings.TrimSpace(vm.Name) == "" {
 		return fmt.Errorf("%w: имя ВМ обязательно", ErrBadRequest)
 	}
-	mu := s.locker()
-	mu.Lock()
-	defer mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	vms, err := s.load()
 	if err != nil {
 		return err
@@ -85,26 +83,19 @@ func (s *VMStore) Upsert(vm VMConfig) error {
 // Delete удаляет ВМ из реестра по имени.
 // Маршруты Caddy/state НЕ трогаются (вариант A: offline-записи чистятся вручную).
 func (s *VMStore) Delete(name string) error {
-	mu := s.locker()
-	mu.Lock()
-	defer mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	vms, err := s.load()
 	if err != nil {
 		return err
 	}
 	lname := strings.ToLower(name)
-	found := false
-	for _, v := range vms {
-		if strings.ToLower(v.Name) == lname {
-			found = true
-			break
-		}
-	}
-	if !found {
-		return fmt.Errorf("%w: ВМ %s не найдена", ErrNotFound, name)
-	}
+	before := len(vms)
 	filtered := slices.DeleteFunc(vms, func(v VMConfig) bool {
 		return strings.ToLower(v.Name) == lname
 	})
+	if len(filtered) == before {
+		return fmt.Errorf("%w: ВМ %s не найдена", ErrNotFound, name)
+	}
 	return s.save(filtered)
 }

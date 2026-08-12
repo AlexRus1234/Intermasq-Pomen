@@ -44,8 +44,18 @@ function getPluginBase() {
 // первым (production), затем текущий document (dev/E2E). На любом
 // SecurityError fallback на пустую строку → axios шлёт без Authorization.
 function getAuthToken() {
-    try { return window.parent.localStorage.getItem('token') || '' } catch (_) {}
-    try { return localStorage.getItem('token') || '' } catch (_) { return '' }
+    // Production: JWT живёт в localStorage родителя (панель Intermasq).
+    try {
+        return window.parent.localStorage.getItem('token') || ''
+    } catch (_) {
+        // cross-origin parent или нет родителя — fallback ниже.
+    }
+    // Dev / E2E: токен в собственном localStorage плагина.
+    try {
+        return localStorage.getItem('token') || ''
+    } catch (_) {
+        return ''
+    }
 }
 
 const api = axios.create({ baseURL: getPluginBase() })

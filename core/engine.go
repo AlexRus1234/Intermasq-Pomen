@@ -125,13 +125,13 @@ func (e *Engine) Provision(c ContainerInfo) (string, error) {
 	if c.Port == "" {
 		return "", fmt.Errorf("%w: у контейнера %s нет label port-XXXX", ErrBadRequest, c.RealName)
 	}
-	if _, ok := e.Nodes[strings.ToLower(c.Node)]; !ok {
+	nodeKey := strings.ToLower(c.Node)
+	if _, ok := e.Nodes[nodeKey]; !ok {
 		return "", fmt.Errorf("%w: неизвестная нода: %s", ErrBadRequest, c.Node)
 	}
 
 	name := strings.ToLower(c.Name)
 	vmName := strings.ToLower(c.VMName)
-	nodeKey := strings.ToLower(c.Node)
 
 	domain := fmt.Sprintf(FQDNFormat, name, vmName, nodeKey, e.Domain)
 	routeID := fmt.Sprintf(RouteIDFormat, vmName, name, nodeKey)
@@ -156,7 +156,7 @@ func (e *Engine) Provision(c ContainerInfo) (string, error) {
 		// и Caddy не разошлись. Caddy.DeleteRouteAndTLS — best-effort,
 		// внутренние ошибки логируются в самом методе.
 		slog.Warn("caddy restart failed after ReplayRoute, rolling back route", "node", nodeKey, "route_id", routeID, "err", err)
-		_ = e.Caddy.DeleteRouteAndTLS(nodeKey, routeID, tlsID)
+		e.Caddy.DeleteRouteAndTLS(nodeKey, routeID, tlsID)
 		return "", fmt.Errorf("Caddy restart (попытка отката выполнена): %w", err)
 	}
 
@@ -221,7 +221,7 @@ func (e *Engine) DeprovisionByID(routeID string) error {
 	// останется фантомный маршрут, но UI/state будет консистентен; при
 	// следующем полном ReplayCaddy фантом не вернётся (его нет в state).
 	// Caddy.DeleteRouteAndTLS логирует ошибки внутри себя.
-	_ = e.Caddy.DeleteRouteAndTLS(rec.Node, rec.RouteID, rec.TLSID)
+	e.Caddy.DeleteRouteAndTLS(rec.Node, rec.RouteID, rec.TLSID)
 	return nil
 }
 

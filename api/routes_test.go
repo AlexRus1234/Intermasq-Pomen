@@ -34,10 +34,8 @@ type stubCaddy struct{}
 func (stubCaddy) ReplayRoute(node, domain, ip, port, proto, routeID, tlsID string) error {
 	return nil
 }
-func (stubCaddy) RestartCaddy(node string) error { return nil }
-func (stubCaddy) DeleteRouteAndTLS(node, routeID, tlsID string) error {
-	return nil
-}
+func (stubCaddy) RestartCaddy(node string) error                { return nil }
+func (stubCaddy) DeleteRouteAndTLS(node, routeID, tlsID string) {}
 
 func newTestServer(t *testing.T) (*Server, *core.VMStore) {
 	t.Helper()

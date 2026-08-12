@@ -34,11 +34,12 @@ type CaddyClient struct {
 }
 
 func NewCaddyClient(urls map[string]string, tlsCfg TLSConfig, timeout time.Duration) *CaddyClient {
-	// Копируем map и триммим '/' — НЕ мутируем входной map вызывающего кода
-	// (audit §14.7: побочный эффект, трудно отлаживать).
+	// Копируем map, триммим '/' и нормализуем ключи в lowercase — НЕ мутируем
+	// входной map вызывающего кода (audit §14.7). Lookup в baseURLFor тоже
+	// идёт через ToLower, так что регистр config.json теперь не важен.
 	trimmed := make(map[string]string, len(urls))
 	for k, v := range urls {
-		trimmed[k] = strings.TrimRight(v, "/")
+		trimmed[strings.ToLower(k)] = strings.TrimRight(v, "/")
 	}
 	return &CaddyClient{BaseURLs: trimmed, tlsCfg: tlsCfg, client: &http.Client{Timeout: timeout}}
 }
@@ -85,10 +86,10 @@ func GenerateTLSPolicy(tlsCfg TLSConfig, domain, tlsID string) CaddyTLSPolicy {
 	}
 }
 
-func (c *CaddyClient) DeleteRouteAndTLS(nodeName, routeID, tlsID string) error {
+func (c *CaddyClient) DeleteRouteAndTLS(nodeName, routeID, tlsID string) {
 	baseURL, err := c.baseURLFor(nodeName)
 	if err != nil {
-		return nil
+		return
 	}
 
 	// Best-effort удаление маршрута и TLS-политики. Ошибки логируем, но не
@@ -110,7 +111,6 @@ func (c *CaddyClient) DeleteRouteAndTLS(nodeName, routeID, tlsID string) error {
 			slog.Warn("caddy delete: non-OK status", "node", nodeName, "id", id, "status", resp.StatusCode)
 		}
 	}
-	return nil
 }
 
 func (c *CaddyClient) RestartCaddy(nodeName string) error {
@@ -225,7 +225,11 @@ func (c *CaddyClient) ReplayRoute(nodeName, domain, targetIP, targetPort, protoc
 		if err != nil {
 			return err
 		}
-		resp.Body.Close()
+		defer resp.Body.Close()
+		if resp.StatusCode >= 400 {
+			body, _ := io.ReadAll(resp.Body)
+			return fmt.Errorf("init TLS parent PUT %s (%d): %s", caddyPathTLS, resp.StatusCode, string(body))
+		}
 		return nil
 	}
 	if err := c.upsertByID(baseURL, tlsID, caddyPathTLSPolicies, tlsPolicy, initTLS); err != nil {
@@ -259,7 +263,11 @@ func (c *CaddyClient) ReplayRoute(nodeName, domain, targetIP, targetPort, protoc
 		if err != nil {
 			return err
 		}
-		resp.Body.Close()
+		defer resp.Body.Close()
+		if resp.StatusCode >= 400 {
+			body, _ := io.ReadAll(resp.Body)
+			return fmt.Errorf("init HTTP server PUT %s (%d): %s", caddyPathHTTPServer, resp.StatusCode, string(body))
+		}
 		return nil
 	}
 	if err := c.upsertByID(baseURL, routeID, caddyPathHTTPServerRoutes, routeConfig, initRoute); err != nil {

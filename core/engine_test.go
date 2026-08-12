@@ -19,6 +19,7 @@ package core
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -26,7 +27,7 @@ import (
 type mockCaddy struct {
 	replayFn      func(node, domain, ip, port, proto, routeID, tlsID string) error
 	restartFn     func(node string) error
-	deleteRouteFn func(node, routeID, tlsID string) error
+	deleteRouteFn func(node, routeID, tlsID string)
 
 	replayCalls      int
 	restartCalls     int
@@ -36,7 +37,7 @@ type mockCaddy struct {
 func (m *mockCaddy) ReplayRoute(node, domain, ip, port, proto, routeID, tlsID string) error {
 	m.replayCalls++
 	if m.replayFn != nil {
-		return m.replayFn(routeID, domain, ip, port, proto, routeID, tlsID)
+		return m.replayFn(node, domain, ip, port, proto, routeID, tlsID)
 	}
 	return nil
 }
@@ -47,12 +48,11 @@ func (m *mockCaddy) RestartCaddy(node string) error {
 	}
 	return nil
 }
-func (m *mockCaddy) DeleteRouteAndTLS(node, routeID, tlsID string) error {
+func (m *mockCaddy) DeleteRouteAndTLS(node, routeID, tlsID string) {
 	m.deleteRouteCalls = append(m.deleteRouteCalls, routeID)
 	if m.deleteRouteFn != nil {
-		return m.deleteRouteFn(node, routeID, tlsID)
+		m.deleteRouteFn(node, routeID, tlsID)
 	}
-	return nil
 }
 
 func newTestEngine(t *testing.T, caddy CaddyAPI) (*Engine, *StateStore) {
@@ -92,7 +92,7 @@ func TestEngine_Provision_Success(t *testing.T) {
 	if len(records) != 1 || records[0].Domain != "athens.vm0.node0.internal" {
 		t.Errorf("state record wrong: %+v", records)
 	}
-	if !contains(msg, "athens.vm0.node0.internal") {
+	if !strings.Contains(msg, "athens.vm0.node0.internal") {
 		t.Errorf("success message lost domain: %q", msg)
 	}
 }
@@ -218,17 +218,4 @@ func TestEngine_Deprovision_UnknownRouteID(t *testing.T) {
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("unknown route_id should return ErrNotFound, got: %v", err)
 	}
-}
-
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || (len(sub) > 0 && containsStr(s, sub)))
-}
-
-func containsStr(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
 }

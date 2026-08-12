@@ -41,9 +41,6 @@ const (
 	caddyStop = "/stop"
 )
 
-// Имя HTTP-сервера Caddy (srv0) — захардкожено в Caddy-конфиге Pomen.
-const caddyHTTPServerName = "srv0"
-
 // Listen-адрес Caddy-сервера — Pomen всегда терминирует :443.
 const caddyHTTPListen = ":443"
 

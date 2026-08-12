@@ -96,8 +96,3 @@ func (s *JSONStore[T]) save(records []T) error {
 	}
 	return os.Rename(tmp, s.path)
 }
-
-// locker возвращает мьютекс стор для использования встроенными типами
-// (StateStore.Upsert и т.п.) — они сами строят критические секции на нём,
-// потому что им нужно прочитать + модифицировать + записать под одной блокировкой.
-func (s *JSONStore[T]) locker() *sync.Mutex { return &s.mu }

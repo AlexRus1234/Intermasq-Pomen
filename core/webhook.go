@@ -73,7 +73,7 @@ func (w *WebhookClient) ListContainers(vm VMConfig, endpoint string) ([]Containe
 // Изолирует транспортную часть от нормализации (которая тестируется отдельно).
 func (w *WebhookClient) fetchContainers(vm VMConfig, endpoint string) ([]rawPodmanContainer, error) {
 	if endpoint == "" {
-		endpoint = "/hooks/podman"
+		endpoint = DefaultWebhookPath
 	}
 	url := strings.TrimRight(vm.WebhookURL, "/") + endpoint
 

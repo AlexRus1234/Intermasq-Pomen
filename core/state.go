@@ -45,9 +45,8 @@ func NewStateStore(path string) *StateStore {
 }
 
 func (s *StateStore) Upsert(rec RouteRecord) error {
-	mu := s.locker()
-	mu.Lock()
-	defer mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	records, err := s.load()
 	if err != nil {
 		return err
@@ -72,9 +71,8 @@ func (s *StateStore) Upsert(rec RouteRecord) error {
 }
 
 func (s *StateStore) Remove(routeID string) error {
-	mu := s.locker()
-	mu.Lock()
-	defer mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	records, err := s.load()
 	if err != nil {
 		return err
