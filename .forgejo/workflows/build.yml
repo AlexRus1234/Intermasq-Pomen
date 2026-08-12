@@ -282,7 +282,7 @@ jobs:
           done
 
           # Smoke.
-          BASE=http://127.0.0.1:18992 WEBHOOK_MOCK_URL=http://127.0.0.1:18091 ./tests/smoke.sh
+          BASE=http://127.0.0.1:18992 WEBHOOK_MOCK_URL=http://127.0.0.1:18091 bash tests/smoke.sh
           SMOKE_RC=$?
 
           # Cleanup.
