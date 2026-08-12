@@ -16,18 +16,14 @@
 
 name: Зеркалирование Pomen
 
-# ОТКЛЮЧЕНО до создания зеркал на GitHub / Codeberg.
-# Сейчас запускается только вручную (workflow_dispatch). Когда зеркала будут
-# готовы — верни блок on: push (branches + tags) обратно по образцу из
-# .forgejo/workflows/mirror.yaml в материнском Intermasq.
+# Срабатывает при каждом пуше в основную ветку и на теги v*.
 on:
-  workflow_dispatch: {}
-  # push:
-  #   branches:
-  #     - main
-  #     - master
-  #   tags:
-  #     - 'v*'
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
 
 jobs:
   sync-mirrors:
