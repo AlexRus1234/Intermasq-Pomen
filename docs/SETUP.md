@@ -29,29 +29,55 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 ## 2. Установка плагина на сервер Intermasq
 
 ### 2.1 Перенос файлов
+
+Начиная с версии после рефакторинга UI встраивается в бинарь через `//go:embed web`
+(см. [INTERNALS.md](INTERNALS.md)) — отдельно копировать `index.html` / `app.js`
+не нужно, они уже внутри `pomen`:
+
 ```bash
 sudo mkdir -p /etc/intermasq/plugins/pomen
 sudo cp pomen-linux                /etc/intermasq/plugins/pomen/pomen
 sudo chmod +x                      /etc/intermasq/plugins/pomen/pomen
-sudo cp config.json index.html manifest.json /etc/intermasq/plugins/pomen/
+sudo cp manifest.json              /etc/intermasq/plugins/pomen/
+sudo cp config.example.json        /etc/intermasq/plugins/pomen/config.json
 sudo chown -R intermasq:intermasq  /etc/intermasq/plugins/pomen
 ```
 
-### 2.2 config.json (статика — ноды и их Caddy)
+> `config.example.json` — шаблон с placeholder'ами. Копируем его в
+> `config.json` и редактируем под своё окружение (см. 2.2). Сам `config.json`
+> с продакшен-данными не коммитится в репозиторий и в `.gitignore`.
+
+### 2.2 config.json (статика — ноды, Caddy, TLS, таймауты)
+
 `/etc/intermasq/plugins/pomen/config.json`:
+
 ```json
 {
     "base_domain": ".internal",
     "nodes": {
         "yadr00": { "caddy_url": "http://172.20.5.3:2019" },
         "yadr01": { "caddy_url": "http://172.20.6.3:2019" }
-    }
+    },
+    "tls":     { "acme_ca": "https://172.20.0.1:9000/acme/acme/directory",
+                 "root_ca_path": "/etc/caddy/root_ca.crt" },
+    "webhook": { "path": "/hooks/podman", "secret_header": "X-VM-Secret" },
+    "timeouts":{ "caddy": "10s", "webhook": "15s", "restart_delay": "2s" }
 }
 ```
+
 - `base_domain` — суффикс всех доменов. FQDN = `<container>.<vm>.<node><base_domain>`.
 - `nodes` — map нод на URL их Caddy Admin API. **Те же, что в Povez.**
+- `tls` — параметры ACME-issuer'а для Caddy (по умолчанию внутренний Step-CA).
+- `webhook` — путь на вебхуке ВМ (`/hooks/podman` для adnanh/webhook) и имя
+  HTTP-заголовка для секрета.
+- `timeouts` — HTTP-таймауты Caddy/Webhook и пауза перед `/stop` в ReplayCaddy.
 
-Секретов ВМ тут **нет** — они в `vms.json`, добавляются через UI.
+Любую секцию кроме `base_domain` и `nodes` можно опустить — применятся дефолты
+из `core/constants.go`. Секретов ВМ тут **нет** — они в `vms.json`, добавляются
+через UI.
+
+Путь к config можно перектуть через env `CONFIG_FILE` (по умолчанию `config.json`
+рядом с бинарем).
 
 ### 2.3 manifest.json
 Уже в комплекте:
@@ -59,9 +85,13 @@ sudo chown -R intermasq:intermasq  /etc/intermasq/plugins/pomen
 {
     "id": "pomen",
     "name": "Pomen",
+    "version": "1.0.0",
     "bin": "pomen"
 }
 ```
+Поле `version` обновляется автоматически при сборке в CI (через `jq`),
+совпадает с тем, что отдаёт `GET /api/version` и `--version`.
+
 Intermasq при старте сам:
 - найдёт `/etc/intermasq/plugins/pomen/manifest.json`
 - запустит `pomen` как дочерний процесс
@@ -79,6 +109,22 @@ sudo journalctl -u intermasq --since "1 min ago" | grep PLUGINS
 ```
 http://<IP_INTERMASQ>:8080/plugins/pomen/
 ```
+
+В заголовке UI отображается версия сборки — это быстрый sanity-check, что
+запущен ожидаемый бинарь.
+
+### 2.6 Альтернатива: dev-режим без Intermasq
+
+Для локальной разработки или smoke-тестов Pomen можно запустить вне хоста:
+
+```bash
+cp config.example.json config.json       # отредактируй под своё окружение
+POMEN_DEV_PORT=18992 ./pomen             # listens on TCP :18992, без unix-сокета
+curl http://127.0.0.1:18992/api/version
+```
+
+`POMEN_DEV_PORT` — единственный способ запустить Pomen в обход контракта
+Intermasq. В этом режиме **нет auth proxy** — не используй в production.
 
 ## 3. Настройка вебхука на ВМ
 
@@ -215,4 +261,7 @@ sudo chmod +x /etc/intermasq/plugins/pomen/pomen
 sudo chown intermasq:intermasq /etc/intermasq/plugins/pomen/pomen
 sudo systemctl start intermasq
 ```
-Состояние (`vms.json`, `routes.json) сохраняется — ничего не теряется.
+Состояние (`vms.json`, `routes.json`) сохраняется — ничего не теряется.
+
+После обновления проверь версию через `GET /api/version` или в заголовке UI —
+должна совпадать с тегом релиза.
