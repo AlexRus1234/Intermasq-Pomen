@@ -1,0 +1,28 @@
+{
+    "base_domain": ".internal",
+
+    "nodes": {
+        "node0": {
+            "caddy_url": "http://caddy-node0.internal:2019"
+        },
+        "node1": {
+            "caddy_url": "http://caddy-node1.internal:2019"
+        }
+    },
+
+    "tls": {
+        "acme_ca": "https://step-ca.internal:9000/acme/acme/directory",
+        "root_ca_path": "/etc/caddy/root_ca.crt"
+    },
+
+    "webhook": {
+        "path": "/hooks/podman",
+        "secret_header": "X-VM-Secret"
+    },
+
+    "timeouts": {
+        "caddy": "10s",
+        "webhook": "15s",
+        "restart_delay": "2s"
+    }
+}
