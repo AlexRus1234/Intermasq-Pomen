@@ -119,7 +119,14 @@ func (c *CaddyClient) RestartCaddy(nodeName string) error {
 		return err
 	}
 	slog.Info("caddy restart", "node", nodeName, "endpoint", caddyStop)
-	resp, err := http.Post(baseURL+caddyStop, "application/json", nil)
+	// Используем c.client, чтобы применялся настроенный timeout (раньше шли через
+	// http.DefaultClient без таймаута — audit: утечка таймаута в RestartCaddy).
+	req, err := http.NewRequest("POST", baseURL+caddyStop, nil)
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -148,27 +155,44 @@ func (c *CaddyClient) upsertByID(baseURL, id, createPath string, payload interfa
 		return fmt.Errorf("marshal payload: %w", err)
 	}
 
-	// GET → если есть, делаем PUT (update).
-	if getResp, gerr := c.client.Get(caddyIDURL(baseURL, id)); gerr == nil {
-		getResp.Body.Close()
-		if getResp.StatusCode == 200 {
-			req, _ := http.NewRequest("PUT", caddyIDURL(baseURL, id), bytes.NewBuffer(data))
-			req.Header.Set("Content-Type", "application/json")
-			resp, err := c.client.Do(req)
-			if err != nil {
-				return err
-			}
-			defer resp.Body.Close()
-			if resp.StatusCode >= 400 {
-				body, _ := io.ReadAll(resp.Body)
-				return fmt.Errorf("PUT %s (%d): %s", id, resp.StatusCode, string(body))
-			}
-			return nil
+	// GET → 200 → PUT (update), 404 → POST (create), прочие статусы → ошибка.
+	// Раньше транспортная ошибка GET (DNS/connection refused) молча
+	// воспринималась как "объекта нет, делаем POST", что маскировало реальные
+	// сетевые проблемы. Теперь различаем явно.
+	getResp, gerr := c.client.Get(caddyIDURL(baseURL, id))
+	if gerr != nil {
+		return fmt.Errorf("GET %s: %w", id, gerr)
+	}
+	defer getResp.Body.Close()
+	switch getResp.StatusCode {
+	case 200:
+		req, err := http.NewRequest("PUT", caddyIDURL(baseURL, id), bytes.NewBuffer(data))
+		if err != nil {
+			return fmt.Errorf("build request: %w", err)
 		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := c.client.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode >= 400 {
+			body, _ := io.ReadAll(resp.Body)
+			return fmt.Errorf("PUT %s (%d): %s", id, resp.StatusCode, string(body))
+		}
+		return nil
+	case 404:
+		// Объект не найден → идём в POST (create) ниже.
+	default:
+		body, _ := io.ReadAll(getResp.Body)
+		return fmt.Errorf("GET %s (%d): %s", id, getResp.StatusCode, string(body))
 	}
 
 	// Нет → POST (create).
-	req, _ := http.NewRequest("POST", baseURL+createPath, bytes.NewBuffer(data))
+	req, err := http.NewRequest("POST", baseURL+createPath, bytes.NewBuffer(data))
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -184,7 +208,10 @@ func (c *CaddyClient) upsertByID(baseURL, id, createPath string, payload interfa
 			if err := initIfMissing(); err != nil {
 				return fmt.Errorf("init parent для %s: %w", createPath, err)
 			}
-			req2, _ := http.NewRequest("POST", baseURL+createPath, bytes.NewBuffer(data))
+			req2, err := http.NewRequest("POST", baseURL+createPath, bytes.NewBuffer(data))
+			if err != nil {
+				return fmt.Errorf("build request: %w", err)
+			}
 			req2.Header.Set("Content-Type", "application/json")
 			resp2, err := c.client.Do(req2)
 			if err != nil {
@@ -219,7 +246,10 @@ func (c *CaddyClient) ReplayRoute(nodeName, domain, targetIP, targetPort, protoc
 	initTLS := func() error {
 		payload := caddyAutomationConfig{Automation: caddyAutomation{Policies: []CaddyTLSPolicy{tlsPolicy}}}
 		data, _ := json.Marshal(payload)
-		req, _ := http.NewRequest("PUT", baseURL+caddyPathTLS, bytes.NewBuffer(data))
+		req, err := http.NewRequest("PUT", baseURL+caddyPathTLS, bytes.NewBuffer(data))
+		if err != nil {
+			return fmt.Errorf("build request: %w", err)
+		}
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := c.client.Do(req)
 		if err != nil {
@@ -238,7 +268,10 @@ func (c *CaddyClient) ReplayRoute(nodeName, domain, targetIP, targetPort, protoc
 
 	// Добавляем domain в automate-список (выпуск сертификата в фоне).
 	automatePayload, _ := json.Marshal([]string{domain})
-	reqAuth, _ := http.NewRequest("POST", baseURL+caddyPathTLSCertAutomate, bytes.NewBuffer(automatePayload))
+	reqAuth, err := http.NewRequest("POST", baseURL+caddyPathTLSCertAutomate, bytes.NewBuffer(automatePayload))
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
 	reqAuth.Header.Set("Content-Type", "application/json")
 	respAuth, err := c.client.Do(reqAuth)
 	if err != nil {
@@ -257,7 +290,10 @@ func (c *CaddyClient) ReplayRoute(nodeName, domain, targetIP, targetPort, protoc
 			Routes: []CaddyRoute{routeConfig},
 		}
 		data, _ := json.Marshal(payload)
-		req, _ := http.NewRequest("PUT", baseURL+caddyPathHTTPServer, bytes.NewBuffer(data))
+		req, err := http.NewRequest("PUT", baseURL+caddyPathHTTPServer, bytes.NewBuffer(data))
+		if err != nil {
+			return fmt.Errorf("build request: %w", err)
+		}
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := c.client.Do(req)
 		if err != nil {

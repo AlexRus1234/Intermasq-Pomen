@@ -52,13 +52,10 @@ func (s *StateStore) Upsert(rec RouteRecord) error {
 		return err
 	}
 	now := time.Now().Format(time.RFC3339)
-	if rec.UpdatedAt == "" {
-		rec.UpdatedAt = now
-	}
+	rec.UpdatedAt = now
 	found := false
 	for i, r := range records {
 		if r.RouteID == rec.RouteID {
-			rec.UpdatedAt = now
 			records[i] = rec
 			found = true
 			break

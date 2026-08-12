@@ -31,7 +31,7 @@ const (
 	DefaultWebhookTimeout = 15 * time.Second
 
 	// DefaultRestartDelay — пауза между записью последнего маршрута и
-	// вызовом /stop в ReplayCaddy. Даёт Caddy время оставитьCertManager.
+	// вызовом /stop в ReplayCaddy. Даёт Caddy время завершить CertManager.
 	DefaultRestartDelay = 2 * time.Second
 
 	// DefaultWebhookPath — стандартный mount point adnanh/webhook.

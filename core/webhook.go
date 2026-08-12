@@ -27,6 +27,11 @@ import (
 	"time"
 )
 
+// webhookEmptyBody — adnanh/webhook падает с "unsupported content type" ДО
+// проверки trigger-rule, если у запроса нет body. Шлём пустой JSON-объект,
+// чтобы триггер отработал. Когда перейдём на другой вебхук-демон — body можно убрать.
+const webhookEmptyBody = "{}"
+
 // WebhookClient дёргает вебхук на ВМ, который исполняет `podman ps --format json`
 // от бесправного пользователя. Auth — секрет в заголовке (DefaultVMSecretHeader
 // или перекрыт через config.webhook.secret_header), per-VM.
@@ -77,11 +82,7 @@ func (w *WebhookClient) fetchContainers(vm VMConfig, endpoint string) ([]rawPodm
 	}
 	url := strings.TrimRight(vm.WebhookURL, "/") + endpoint
 
-	// WORKAROUND: adnanh/webhook падает с "unsupported content type" ДО
-	// проверки trigger-rule, если у запроса нет body. Шлём пустой JSON-объект
-	// и Content-Type: application/json, чтобы триггер отработал. Когда перейдём
-	// на другой вебхук-демон — body можно убрать.
-	req, err := http.NewRequest("POST", url, bytes.NewBufferString("{}"))
+	req, err := http.NewRequest("POST", url, bytes.NewBufferString(webhookEmptyBody))
 	if err != nil {
 		return nil, err
 	}

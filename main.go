@@ -79,6 +79,13 @@ func loadConfig(path string) (*core.Config, error) {
 	return &cfg, err
 }
 
+func envOrDefault(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
 func main() {
 	showVersion := flag.Bool("version", false, "print build version and exit")
 	flag.Parse()
@@ -88,13 +95,10 @@ func main() {
 		return
 	}
 
-	configPath := os.Getenv("CONFIG_FILE")
-	if configPath == "" {
-		configPath = "config.json"
-	}
+	configPath := envOrDefault("CONFIG_FILE", "config.json")
 	rawCfg, err := loadConfig(configPath)
 	if err != nil {
-		log.Fatalf("Ошибка чтения %s: %v", configPath, err)
+		log.Fatalf("failed to read config %s: %v", configPath, err)
 	}
 	cfg := rawCfg.WithDefaults()
 
@@ -104,16 +108,10 @@ func main() {
 	}
 	caddyClient := core.NewCaddyClient(caddyURLs, cfg.TLS, cfg.CaddyTimeout)
 
-	statePath := os.Getenv("STATE_FILE")
-	if statePath == "" {
-		statePath = "/etc/intermasq/plugins/pomen/routes.json"
-	}
+	statePath := envOrDefault("STATE_FILE", "/etc/intermasq/plugins/pomen/routes.json")
 	stateStore := core.NewStateStore(statePath)
 
-	vmsPath := os.Getenv("VMS_FILE")
-	if vmsPath == "" {
-		vmsPath = "/etc/intermasq/plugins/pomen/vms.json"
-	}
+	vmsPath := envOrDefault("VMS_FILE", "/etc/intermasq/plugins/pomen/vms.json")
 	vmStore := core.NewVMStore(vmsPath)
 
 	webhookClient := core.NewWebhookClient(cfg.WebhookTimeout, cfg.Webhook.SecretHeader)

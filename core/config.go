@@ -43,7 +43,7 @@ type WebhookConfig struct {
 }
 
 // TimeoutsConfig — таймауты HTTP-клиентов и задержки оркестратора.
-// Строки parce'ятся через time.ParseDuration (например "10s", "2s").
+// Строки парсятся через time.ParseDuration (например "10s", "2s").
 type TimeoutsConfig struct {
 	Caddy        string `json:"caddy"`
 	Webhook      string `json:"webhook"`
@@ -67,25 +67,19 @@ func (cfg Config) WithDefaults() ResolvedConfig {
 			Webhook:      orDefault(cfg.Timeouts.Webhook, DefaultWebhookTimeout.String()),
 			RestartDelay: orDefault(cfg.Timeouts.RestartDelay, DefaultRestartDelay.String()),
 		},
-		CaddyTimeout:    DefaultCaddyTimeout,
-		WebhookTimeout:  DefaultWebhookTimeout,
-		RestartDelayDur: DefaultRestartDelay,
 	}
-	if r.TLS.ACMECA == "" {
-		r.TLS.ACMECA = DefaultACMECA
+	r.TLS.ACMECA = orDefault(r.TLS.ACMECA, DefaultACMECA)
+	r.TLS.RootCAPath = orDefault(r.TLS.RootCAPath, DefaultRootCAPath)
+	applyDur := func(s string, def time.Duration, dst *time.Duration) {
+		if d, err := time.ParseDuration(s); err == nil {
+			*dst = d
+		} else {
+			*dst = def
+		}
 	}
-	if r.TLS.RootCAPath == "" {
-		r.TLS.RootCAPath = DefaultRootCAPath
-	}
-	if d, err := time.ParseDuration(r.Timeouts.Caddy); err == nil {
-		r.CaddyTimeout = d
-	}
-	if d, err := time.ParseDuration(r.Timeouts.Webhook); err == nil {
-		r.WebhookTimeout = d
-	}
-	if d, err := time.ParseDuration(r.Timeouts.RestartDelay); err == nil {
-		r.RestartDelayDur = d
-	}
+	applyDur(r.Timeouts.Caddy, DefaultCaddyTimeout, &r.CaddyTimeout)
+	applyDur(r.Timeouts.Webhook, DefaultWebhookTimeout, &r.WebhookTimeout)
+	applyDur(r.Timeouts.RestartDelay, DefaultRestartDelay, &r.RestartDelayDur)
 	return r
 }
 

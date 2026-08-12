@@ -19,7 +19,9 @@ package core
 import (
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -82,6 +84,7 @@ func (e *Engine) ListNodes() []string {
 	for k := range e.Nodes {
 		out = append(out, k)
 	}
+	slices.Sort(out)
 	return out
 }
 
@@ -160,26 +163,27 @@ func (e *Engine) Provision(c ContainerInfo) (string, error) {
 		return "", fmt.Errorf("Caddy restart (попытка отката выполнена): %w", err)
 	}
 
-	if e.State != nil {
-		if err := e.State.Upsert(RouteRecord{
-			Domain:     domain,
-			TargetIP:   c.VMIP,
-			TargetPort: c.Port,
-			Protocol:   c.Protocol,
-			RouteID:    routeID,
-			TLSID:      tlsID,
-			Node:       nodeKey,
-			VMName:     c.VMName,
-		}); err != nil {
-			// Caddy уже настроен и перезапущен — домен РАБОТАЕТ, но мы не
-			// смогли записать факт этого в state. UI не покажет домен;
-			// пользователь может пере-выдать (State.Upsert идемпотентен по
-			// route_id) или вручную добавить запись. Не откатываем Caddy,
-			// чтобы не сломать уже выданный сертификат.
-			slog.Error("state write failed AFTER caddy configured; domain is live but invisible to UI",
-				"domain", domain, "route_id", routeID, "err", err)
-			return "", fmt.Errorf("state ошибка (домен уже активен в Caddy, но не записан в state): %w", err)
-		}
+	if e.State == nil {
+		return "", fmt.Errorf("state store не инициализирован (домен уже активен в Caddy, но не записан в state)")
+	}
+	if err := e.State.Upsert(RouteRecord{
+		Domain:     domain,
+		TargetIP:   c.VMIP,
+		TargetPort: c.Port,
+		Protocol:   c.Protocol,
+		RouteID:    routeID,
+		TLSID:      tlsID,
+		Node:       nodeKey,
+		VMName:     c.VMName,
+	}); err != nil {
+		// Caddy уже настроен и перезапущен — домен РАБОТАЕТ, но мы не
+		// смогли записать факт этого в state. UI не покажет домен;
+		// пользователь может пере-выдать (State.Upsert идемпотентен по
+		// route_id) или вручную добавить запись. Не откатываем Caddy,
+		// чтобы не сломать уже выданный сертификат.
+		slog.Error("state write failed AFTER caddy configured; domain is live but invisible to UI",
+			"domain", domain, "route_id", routeID, "err", err)
+		return "", fmt.Errorf("state ошибка (домен уже активен в Caddy, но не записан в state): %w", err)
 	}
 
 	return fmt.Sprintf("Успех! %s -> %s:%s", domain, c.VMIP, c.Port), nil
@@ -252,11 +256,20 @@ func (e *Engine) ReplayCaddy() (int, []string, error) {
 	}
 
 	time.Sleep(e.RestartDelay)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
 	for node := range touchedNodes {
-		if err := e.Caddy.RestartCaddy(node); err != nil {
-			errors = append(errors, fmt.Sprintf("рестарт %s: %v", node, err))
-		}
+		wg.Add(1)
+		go func(n string) {
+			defer wg.Done()
+			if err := e.Caddy.RestartCaddy(n); err != nil {
+				mu.Lock()
+				errors = append(errors, fmt.Sprintf("рестарт %s: %v", n, err))
+				mu.Unlock()
+			}
+		}(node)
 	}
+	wg.Wait()
 
 	return ok, errors, nil
 }

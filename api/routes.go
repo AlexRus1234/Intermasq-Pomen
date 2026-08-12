@@ -195,19 +195,21 @@ func (s *Server) HandleProvision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var target *core.ContainerInfo
+	var target core.ContainerInfo
+	found := false
 	for i := range containers {
 		if containers[i].Name == req.ContainerName || containers[i].RealName == req.ContainerName {
-			target = &containers[i]
+			target = containers[i]
+			found = true
 			break
 		}
 	}
-	if target == nil {
+	if !found {
 		jsonError(w, http.StatusNotFound, "Контейнер не найден в свежем списке ВМ")
 		return
 	}
 
-	msg, err := s.Engine.Provision(*target)
+	msg, err := s.Engine.Provision(target)
 	if err != nil {
 		jsonError(w, statusForError(err), err.Error())
 		return
@@ -232,11 +234,7 @@ func (s *Server) HandleDeprovision(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "route_id обязателен")
 		return
 	}
-	if err := s.Engine.DeprovisionByID(req.RouteID); err != nil {
-		jsonError(w, statusForError(err), err.Error())
-		return
-	}
-	jsonResponse(w, http.StatusOK, map[string]string{"message": "Маршрут удалён"})
+	s.deprovisionRoute(w, req.RouteID)
 }
 
 // HandleDeprovisionByID: DELETE /api/deprovision/:routeID
@@ -251,6 +249,13 @@ func (s *Server) HandleDeprovisionByID(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "route_id обязателен")
 		return
 	}
+	s.deprovisionRoute(w, routeID)
+}
+
+// deprovisionRoute — общая логика для HandleDeprovision (POST + JSON body)
+// и HandleDeprovisionByID (DELETE path param). Engine.DeprovisionByID
+// идемпотентен, поэтому оба способа вызова эквивалентны.
+func (s *Server) deprovisionRoute(w http.ResponseWriter, routeID string) {
 	if err := s.Engine.DeprovisionByID(routeID); err != nil {
 		jsonError(w, statusForError(err), err.Error())
 		return
