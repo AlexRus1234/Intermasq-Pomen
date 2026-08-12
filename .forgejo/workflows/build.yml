@@ -345,7 +345,9 @@ jobs:
           done
 
           cd tests/e2e
-          npm ci
+          # npm ci требует package-lock.json; используем npm install пока
+          # lockfile не сгенерирован (отдельной задачей).
+          npm install --no-audit --no-fund
           npx playwright install chromium
           set +e
           E2E_BASE_URL=http://127.0.0.1:18993 npx playwright test
