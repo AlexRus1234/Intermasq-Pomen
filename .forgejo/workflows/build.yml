@@ -233,15 +233,73 @@ jobs:
       # Intermasq to exercise the plugin-loading contract from the host side.
       # Pomen is itself a plugin; it is exercised by the host's CI instead.
 
-      # TODO(testing-stage): wire L3 smoke once tests/suites/ + tests/smoke.sh
-      # exist and Pomen has a dev-mode launch path for CI (currently it runs
-      # only behind a PLUGIN_SOCKET owned by Intermasq). Mirror the mother's
-      # "L3 — smoke tests against running binary" step then.
-      #
-      # - name: L3 — smoke tests against running binary
-      #   run: |
-      #     ...
-      #     BASE=http://localhost:18XXX ./tests/smoke.sh
+      - name: L3 — smoke tests against running pomen-ci
+        # Поднимаем 3 процесса в фоне:
+        #   1) caddy-mock (тестовый fixture, эмулирует Caddy Admin API)
+        #   2) webhook-mock (эмулирует вебхук ВМ с podman ps)
+        #   3) pomen-ci в dev-режиме (POMEN_DEV_PORT, CONFIG_FILE указывает на
+        #      временный config.json с caddy_url → caddy-mock)
+        # Затем гоняем tests/smoke.sh. На любом сбое — kill и exit 1.
+        run: |
+          set +e
+
+          # Сборка mock'ов (отдельные go.mod, не входят в ./... основного модуля).
+          ( cd tests/fixtures/caddy-mock   && go build -o /tmp/caddy-mock . )
+          CADDY_MOCK_RC=$?
+          ( cd tests/fixtures/webhook-mock && go build -o /tmp/webhook-mock . )
+          WEBHOOK_MOCK_RC=$?
+          if [ "$CADDY_MOCK_RC" -ne 0 ] || [ "$WEBHOOK_MOCK_RC" -ne 0 ]; then
+            echo "::error::mock fixtures build failed (caddy=$CADDY_MOCK_RC webhook=$WEBHOOK_MOCK_RC)"
+            exit 1
+          fi
+
+          # Временный config.json: caddy_url указывает на caddy-mock, одна нода.
+          cat > /tmp/pomen-config.json <<'EOF'
+          {
+              "base_domain": ".internal",
+              "nodes": { "node0": { "caddy_url": "http://127.0.0.1:18090" } }
+          }
+          EOF
+
+          # Старт mocks.
+          CADDY_MOCK_ADDR=127.0.0.1:18090 /tmp/caddy-mock &
+          CADDY_PID=$!
+          WEBHOOK_MOCK_ADDR=127.0.0.1:18091 WEBHOOK_MOCK_SECRET=smoke-secret /tmp/webhook-mock &
+          WEBHOOK_PID=$!
+
+          # Старт pomen-ci.
+          CONFIG_FILE=/tmp/pomen-config.json \
+          POMEN_DEV_PORT=18992 \
+          STATE_FILE=/tmp/pomen-routes.json \
+          VMS_FILE=/tmp/pomen-vms.json \
+          ./pomen-ci &
+          POMEN_PID=$!
+
+          # Ждём бинда (max 10 sec).
+          for i in $(seq 1 10); do
+            if curl -sf http://127.0.0.1:18992/api/version >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+
+          # Smoke.
+          BASE=http://127.0.0.1:18992 WEBHOOK_MOCK_URL=http://127.0.0.1:18091 ./tests/smoke.sh
+          SMOKE_RC=$?
+
+          # Cleanup.
+          kill $POMEN_PID 2>/dev/null || true
+          kill $CADDY_PID 2>/dev/null || true
+          kill $WEBHOOK_PID 2>/dev/null || true
+          wait $POMEN_PID 2>/dev/null || true
+          wait $CADDY_PID 2>/dev/null || true
+          wait $WEBHOOK_PID 2>/dev/null || true
+
+          rm -f /tmp/caddy-mock /tmp/webhook-mock /tmp/pomen-config.json \
+                /tmp/pomen-routes.json /tmp/pomen-vms.json
+
+          if [ "$SMOKE_RC" -ne 0 ]; then
+            echo "::error::smoke.sh returned $SMOKE_RC (unexpected failures present)"
+            exit 1
+          fi
 
       # NOTE: no L3.5 dnsmasq compat matrix — Pomen has no dnsmasq dependency.
 
