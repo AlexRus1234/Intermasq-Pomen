@@ -463,16 +463,42 @@ jobs:
           PUBLISH_FILES="$ARTIFACT_NAME ${ARTIFACT_NAME}.sha256"
           echo "Files to publish: $PUBLISH_FILES"
           API="https://codeberg.org/api/v1/repos/AlexRus1234/Intermasq-Pomen"
+
+          # Pre-flight: GET repo to surface the real Codeberg error
+          # (404 = repo invisible to this token, 403 = token lacks scope,
+          # 200 = OK). Without this, POST /releases just says "404" with no body
+          # because curl -f eats the response. Codeberg/Forgejo returns 404
+          # instead of 403 to avoid leaking private repos' existence.
+          echo "Pre-flight GET $API ..."
+          PREFLIGHT_HTTP="$(curl -sS -o /tmp/cb_pre.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${RELEASE_TOKEN}" \
+            "$API" || true)"
+          echo "Pre-flight status: ${PREFLIGHT_HTTP}"
+          echo "Pre-flight body: $(cat /tmp/cb_pre.json)"
+          if [ "$PREFLIGHT_HTTP" != "200" ]; then
+            echo "::error::Codeberg repo not reachable via API (HTTP ${PREFLIGHT_HTTP}). Check TOKEN_CODEBERG scope (needs read:repository + write:repository) and that the repo exists at AlexRus1234/Intermasq-Pomen."
+            exit 1
+          fi
+
           BODY="$(jq -n --arg tag "$VERSION" '{tag_name:$tag, name:$tag, draft:false, prerelease:($tag | test("-"))}')"
-          RELEASE="$(curl -fsSL -X POST \
-            -H "Authorization: token ${RELEASE_TOKEN}" \
+          # Bearer auth (Codeberg now requires it for fine-grained tokens;
+          # classic "Authorization: token ..." 404s on some endpoints).
+          # No -f here so we can print the body on failure.
+          CREATE_HTTP="$(curl -sS -o /tmp/cb_rel.json -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer ${RELEASE_TOKEN}" \
             -H 'Content-Type: application/json' \
             "$API/releases" -d "$BODY")"
-          RELEASE_ID="$(jq -r '.id' <<<"$RELEASE")"
-          test -n "$RELEASE_ID" && test "$RELEASE_ID" != "null"
+          echo "Create release status: ${CREATE_HTTP}"
+          echo "Create release body: $(cat /tmp/cb_rel.json)"
+          if [ "$CREATE_HTTP" != "201" ] && [ "$CREATE_HTTP" != "200" ]; then
+            echo "::error::Codeberg create release failed (HTTP ${CREATE_HTTP}): $(cat /tmp/cb_rel.json)"
+            exit 1
+          fi
+          RELEASE_ID="$(jq -r '.id // empty' /tmp/cb_rel.json)"
+          test -n "$RELEASE_ID"
           for FILE in $PUBLISH_FILES; do
             curl -fsSL -X POST \
-              -H "Authorization: token ${RELEASE_TOKEN}" \
+              -H "Authorization: Bearer ${RELEASE_TOKEN}" \
               -F "attachment=@${FILE}" \
               "$API/releases/${RELEASE_ID}/assets?name=${FILE}"
           done
