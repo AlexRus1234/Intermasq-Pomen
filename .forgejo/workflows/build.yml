@@ -310,14 +310,56 @@ jobs:
       #   run: |
       #     ...
 
-      # TODO(testing-stage): Playwright E2E once tests/e2e/ exists. Pomen's UI
-      # is a single inline index.html rendered inside the Intermasq iframe;
-      # E2E will need either a dev-mode HTTP port or the host panel running.
-      #
-      # - name: L4 — Playwright E2E (opt-in)
-      #   if: success() && github.event.inputs.run_e2e_tests == 'true'
-      #   run: |
-      #     ...
+      - name: L4 — Playwright E2E (opt-in)
+        # Минимальный E2E: один spec, проверяет что Vue-апп монтируется и
+        # /api/version отдаёт версию (footer становится видимым). Запускает
+        # отдельный pomen-ci на порту 18993, чтобы не пересекаться с L3.
+        #
+        # NOTE on deps: `npx playwright install --with-deps` на Fedora падает
+        # (он знает только apt). Ставим shared-lib зависимости chromium через
+        # dnf, а бинарник chromium — без --with-deps. Это копия подхода
+        # материнского CI в Intermasq.
+        if: success() && github.event.inputs.run_e2e_tests == 'true'
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            nss nspr atk at-spi2-atk cups-libs libdrm libxkbcommon \
+            libX11 libXcomposite libXdamage libXext libXfixes libXrandr \
+            mesa-libgbm pango alsa-lib libxshmfence
+
+          # Свежий pomen-ci для E2E (L3 уже сделал cleanup своего экземпляра).
+          cat > /tmp/pomen-e2e-config.json <<'EOF'
+          {
+              "base_domain": ".internal",
+              "nodes": { "node0": { "caddy_url": "http://127.0.0.1:18090" } }
+          }
+          EOF
+          CONFIG_FILE=/tmp/pomen-e2e-config.json \
+          POMEN_DEV_PORT=18993 \
+          STATE_FILE=/tmp/pomen-e2e-routes.json \
+          VMS_FILE=/tmp/pomen-e2e-vms.json \
+          ./pomen-ci &
+          E2E_PID=$!
+          for i in $(seq 1 10); do
+            if curl -sf http://127.0.0.1:18993/api/version >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+
+          cd tests/e2e
+          npm ci
+          npx playwright install chromium
+          set +e
+          E2E_BASE_URL=http://127.0.0.1:18993 npx playwright test
+          PW_RC=$?
+          set -e
+
+          kill $E2E_PID 2>/dev/null || true
+          wait $E2E_PID 2>/dev/null || true
+          rm -f /tmp/pomen-e2e-config.json /tmp/pomen-e2e-routes.json /tmp/pomen-e2e-vms.json
+
+          if [ "$PW_RC" -ne 0 ]; then
+            echo "::error::playwright returned $PW_RC"
+            exit 1
+          fi
 
       # NOTE: no L5 Real VM — Pomen does not manage init systems; that level
       # of testing belongs to the Intermasq host.
