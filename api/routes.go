@@ -18,10 +18,26 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"pomen/core"
 	"strings"
 )
+
+// statusForError переводит доменные ошибки core (ErrBadRequest/ErrNotFound)
+// в подходящий HTTP-статус. Всё остальное считается внутренней ошибкой (500).
+// До этого handler'ы возвращали 500 на любой Err из Engine — smoke ловил
+// 500 там, где semantically нужен 400 или 404.
+func statusForError(err error) int {
+	switch {
+	case errors.Is(err, core.ErrBadRequest):
+		return http.StatusBadRequest
+	case errors.Is(err, core.ErrNotFound):
+		return http.StatusNotFound
+	default:
+		return http.StatusInternalServerError
+	}
+}
 
 // Server — HTTP API Pomen: оборачивает Engine и регистрирует его обработчики
 // на http.ServeMux через Register.
@@ -97,7 +113,7 @@ func (s *Server) HandleVMs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.Engine.AddVM(vm); err != nil {
-			jsonError(w, http.StatusBadRequest, err.Error())
+			jsonError(w, statusForError(err), err.Error())
 			return
 		}
 		jsonResponse(w, http.StatusOK, map[string]string{"message": "ВМ сохранена"})
@@ -120,7 +136,7 @@ func (s *Server) HandleDeleteVM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Engine.RemoveVM(name); err != nil {
-		jsonError(w, http.StatusInternalServerError, err.Error())
+		jsonError(w, statusForError(err), err.Error())
 		return
 	}
 	jsonResponse(w, http.StatusOK, map[string]string{"message": "ВМ удалена из реестра"})
@@ -137,7 +153,7 @@ func (s *Server) HandleGetContainers(w http.ResponseWriter, r *http.Request) {
 	}
 	containers, err := s.Engine.GetContainers(vm)
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, err.Error())
+		jsonError(w, statusForError(err), err.Error())
 		return
 	}
 	jsonResponse(w, http.StatusOK, containers)
@@ -163,7 +179,7 @@ func (s *Server) HandleProvision(w http.ResponseWriter, r *http.Request) {
 
 	containers, err := s.Engine.GetContainers(req.VMName)
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, err.Error())
+		jsonError(w, statusForError(err), err.Error())
 		return
 	}
 
@@ -181,7 +197,7 @@ func (s *Server) HandleProvision(w http.ResponseWriter, r *http.Request) {
 
 	msg, err := s.Engine.Provision(*target)
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, err.Error())
+		jsonError(w, statusForError(err), err.Error())
 		return
 	}
 	jsonResponse(w, http.StatusOK, map[string]string{"message": msg})
@@ -201,7 +217,7 @@ func (s *Server) HandleDeprovision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Engine.DeprovisionByID(req.RouteID); err != nil {
-		jsonError(w, http.StatusInternalServerError, err.Error())
+		jsonError(w, statusForError(err), err.Error())
 		return
 	}
 	jsonResponse(w, http.StatusOK, map[string]string{"message": "Маршрут удалён"})
@@ -220,7 +236,7 @@ func (s *Server) HandleDeprovisionByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Engine.DeprovisionByID(routeID); err != nil {
-		jsonError(w, http.StatusInternalServerError, err.Error())
+		jsonError(w, statusForError(err), err.Error())
 		return
 	}
 	jsonResponse(w, http.StatusOK, map[string]string{"message": "Маршрут удалён"})

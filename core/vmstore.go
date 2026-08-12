@@ -52,14 +52,14 @@ func (s *VMStore) Get(name string) (VMConfig, error) {
 			return v, nil
 		}
 	}
-	return VMConfig{}, fmt.Errorf("ВМ %s не найдена", name)
+	return VMConfig{}, fmt.Errorf("%w: ВМ %s не найдена", ErrNotFound, name)
 }
 
 // Upsert добавляет или обновляет ВМ по имени.
 // Возвращает ошибку, если name пустой.
 func (s *VMStore) Upsert(vm VMConfig) error {
 	if strings.TrimSpace(vm.Name) == "" {
-		return fmt.Errorf("имя ВМ обязательно")
+		return fmt.Errorf("%w: имя ВМ обязательно", ErrBadRequest)
 	}
 	mu := s.locker()
 	mu.Lock()
@@ -101,7 +101,7 @@ func (s *VMStore) Delete(name string) error {
 		}
 	}
 	if !found {
-		return fmt.Errorf("ВМ %s не найдена", name)
+		return fmt.Errorf("%w: ВМ %s не найдена", ErrNotFound, name)
 	}
 	filtered := slices.DeleteFunc(vms, func(v VMConfig) bool {
 		return strings.ToLower(v.Name) == lname

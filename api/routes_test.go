@@ -170,6 +170,48 @@ func TestHandleVersion(t *testing.T) {
 	}
 }
 
+// TestStatusForError — гарантирует, что доменные ошибки core переводятся
+// в правильные HTTP-статусы (audit §13: regression для smoke-прогона,
+// где /api/provision без port label и /api/deprovision/<missing> получали
+// 500 вместо 400/404).
+func TestStatusForError(t *testing.T) {
+	tests := []struct {
+		name   string
+		err    error
+		wantSt int
+	}{
+		{"bad request", wrapErr(core.ErrBadRequest, "x"), 400},
+		{"not found", wrapErr(core.ErrNotFound, "x"), 404},
+		{"internal", errInternal{}, 500},
+		{"nil", nil, 500}, // не должно вызываться с nil, но не паникуем
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := statusForError(tc.err)
+			if got != tc.wantSt {
+				t.Errorf("statusForError(%v) = %d, want %d", tc.err, got, tc.wantSt)
+			}
+		})
+	}
+}
+
+type errInternal struct{}
+
+func (errInternal) Error() string { return "boom" }
+
+func wrapErr(target error, msg string) error {
+	// имитация fmt.Errorf("%w: ...", ErrBadRequest, ...) из core
+	return &wrappedErr{inner: target, msg: msg}
+}
+
+type wrappedErr struct {
+	inner error
+	msg   string
+}
+
+func (e *wrappedErr) Error() string { return e.msg }
+func (e *wrappedErr) Unwrap() error { return e.inner }
+
 // Sanity-check: 405 на недопустимые методы (через http.ServeMux это
 // происходит автоматически, но мы хотим видеть поведение Handler'а).
 func TestHandleVMs_PUT_MethodNotAllowed(t *testing.T) {

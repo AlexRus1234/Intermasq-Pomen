@@ -88,7 +88,7 @@ func (e *Engine) ListNodes() []string {
 // AddVM регистрирует новую ВМ (запрет коллизий по имени — в VMStore.Upsert).
 func (e *Engine) AddVM(vm VMConfig) error {
 	if _, ok := e.Nodes[strings.ToLower(vm.Node)]; !ok {
-		return fmt.Errorf("неизвестная нода: %s", vm.Node)
+		return fmt.Errorf("%w: неизвестная нода: %s", ErrBadRequest, vm.Node)
 	}
 	return e.VMs.Upsert(vm)
 }
@@ -123,10 +123,10 @@ func (e *Engine) GetContainers(vmName string) ([]ContainerInfo, error) {
 //     пользователь не увидит домен в списке, но сам домен работает.
 func (e *Engine) Provision(c ContainerInfo) (string, error) {
 	if c.Port == "" {
-		return "", fmt.Errorf("у контейнера %s нет label port-XXXX", c.RealName)
+		return "", fmt.Errorf("%w: у контейнера %s нет label port-XXXX", ErrBadRequest, c.RealName)
 	}
 	if _, ok := e.Nodes[strings.ToLower(c.Node)]; !ok {
-		return "", fmt.Errorf("неизвестная нода: %s", c.Node)
+		return "", fmt.Errorf("%w: неизвестная нода: %s", ErrBadRequest, c.Node)
 	}
 
 	name := strings.ToLower(c.Name)
@@ -211,7 +211,7 @@ func (e *Engine) DeprovisionByID(routeID string) error {
 		}
 	}
 	if !found {
-		return fmt.Errorf("маршрут %s не найден", routeID)
+		return fmt.Errorf("%w: маршрут %s не найден", ErrNotFound, routeID)
 	}
 
 	if err := e.State.Remove(rec.RouteID); err != nil {

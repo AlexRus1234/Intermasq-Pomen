@@ -22,7 +22,6 @@ import (
 	"testing"
 )
 
-// mockCaddy — реализация CaddyAPI для тестов Engine без живого Caddy.
 // Каждое поле — функция; nil = no-op / nil error (имитация успеха).
 type mockCaddy struct {
 	replayFn      func(node, domain, ip, port, proto, routeID, tlsID string) error
@@ -159,6 +158,9 @@ func TestEngine_Provision_UnknownNode(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unknown node")
 	}
+	if !errors.Is(err, ErrBadRequest) {
+		t.Errorf("unknown node should return ErrBadRequest, got: %v", err)
+	}
 	if mc.replayCalls != 0 {
 		t.Errorf("ReplayRoute should not be called for unknown node")
 	}
@@ -172,6 +174,9 @@ func TestEngine_Provision_NoPort(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error when container has no port label")
+	}
+	if !errors.Is(err, ErrBadRequest) {
+		t.Errorf("no port should return ErrBadRequest, got: %v", err)
 	}
 }
 
@@ -206,8 +211,12 @@ func TestEngine_Deprovision_StateFirst(t *testing.T) {
 func TestEngine_Deprovision_UnknownRouteID(t *testing.T) {
 	mc := &mockCaddy{}
 	e, _ := newTestEngine(t, mc)
-	if err := e.DeprovisionByID("missing"); err == nil {
+	err := e.DeprovisionByID("missing")
+	if err == nil {
 		t.Fatal("expected error for unknown route_id")
+	}
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("unknown route_id should return ErrNotFound, got: %v", err)
 	}
 }
 
