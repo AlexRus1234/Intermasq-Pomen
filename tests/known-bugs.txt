@@ -1,0 +1,28 @@
+# Pomen - plugin for Intermasq
+# Copyright (C) 2026 AlexRus1234
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+# tests/known-bugs.txt для tests/smoke.sh.
+#
+# Format: <BUG_ID>  <short description>
+# Lines starting with # and blank lines are ignored.
+#
+# When a bug is fixed in code, REMOVE its ID from this file. If the
+# corresponding smoke test still fails after the removal, the test
+# expectation needs to be updated. The pipeline will turn red and prompt
+# you to do this — that is intentional.
+#
+# At the moment Pomen has no known bugs that smoke documents. Add an ID
+# here only when a smoke check is intentionally tagged with it.

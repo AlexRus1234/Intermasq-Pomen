@@ -88,9 +88,13 @@ func main() {
 		return
 	}
 
-	rawCfg, err := loadConfig("config.json")
+	configPath := os.Getenv("CONFIG_FILE")
+	if configPath == "" {
+		configPath = "config.json"
+	}
+	rawCfg, err := loadConfig(configPath)
 	if err != nil {
-		log.Fatalf("Ошибка чтения config.json: %v", err)
+		log.Fatalf("Ошибка чтения %s: %v", configPath, err)
 	}
 	cfg := rawCfg.WithDefaults()
 
