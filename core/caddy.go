@@ -29,17 +29,18 @@ import (
 
 type CaddyClient struct {
 	BaseURLs map[string]string
+	tlsCfg   TLSConfig
 	client   *http.Client
 }
 
-func NewCaddyClient(urls map[string]string) *CaddyClient {
+func NewCaddyClient(urls map[string]string, tlsCfg TLSConfig, timeout time.Duration) *CaddyClient {
 	// Копируем map и триммим '/' — НЕ мутируем входной map вызывающего кода
 	// (audit §14.7: побочный эффект, трудно отлаживать).
 	trimmed := make(map[string]string, len(urls))
 	for k, v := range urls {
 		trimmed[k] = strings.TrimRight(v, "/")
 	}
-	return &CaddyClient{BaseURLs: trimmed, client: &http.Client{Timeout: 10 * time.Second}}
+	return &CaddyClient{BaseURLs: trimmed, tlsCfg: tlsCfg, client: &http.Client{Timeout: timeout}}
 }
 
 // baseURLFor возвращает базовый URL Caddy для ноды (case-insensitive lookup).
@@ -68,16 +69,15 @@ func GenerateRoute(domain, targetIP, targetPort, protocol, routeID string) Caddy
 }
 
 // GenerateTLSPolicy собирает CaddyTLSPolicy для domain.
-// ACME-issuer указывает на внутренний Step-CA (URL/путь к root CA сейчас
-// захардкожены — будут вынесены в config на этапе 5).
-func GenerateTLSPolicy(domain, tlsID string) CaddyTLSPolicy {
+// ACME-issuer берётся из tlsCfg (раньше был захардкожен — audit §5).
+func GenerateTLSPolicy(tlsCfg TLSConfig, domain, tlsID string) CaddyTLSPolicy {
 	return CaddyTLSPolicy{
 		ID:       tlsID,
 		Subjects: []string{domain},
 		Issuers: []CaddyIssuer{{
-			Module:               "acme",
-			CA:                   "https://172.20.0.1:9000/acme/acme/directory",
-			TrustedRootsPEMFiles: []string{"/etc/caddy/root_ca.crt"},
+			Module: "acme",
+			CA:     tlsCfg.ACMECA,
+			TrustedRootsPEMFiles: []string{tlsCfg.RootCAPath},
 			Challenges: CaddyChallenges{
 				HTTP: CaddyHTTPChallenge{Disabled: true},
 			},
@@ -215,7 +215,7 @@ func (c *CaddyClient) ReplayRoute(nodeName, domain, targetIP, targetPort, protoc
 
 	slog.Info("caddy replay", "domain", domain, "route_id", routeID, "tls_id", tlsID, "node", nodeName)
 
-	tlsPolicy := GenerateTLSPolicy(domain, tlsID)
+	tlsPolicy := GenerateTLSPolicy(c.tlsCfg, domain, tlsID)
 	initTLS := func() error {
 		payload := caddyAutomationConfig{Automation: caddyAutomation{Policies: []CaddyTLSPolicy{tlsPolicy}}}
 		data, _ := json.Marshal(payload)

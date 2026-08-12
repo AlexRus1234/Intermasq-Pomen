@@ -28,13 +28,20 @@ import (
 )
 
 // WebhookClient дёргает вебхук на ВМ, который исполняет `podman ps --format json`
-// от бесправного пользователя. Auth — секрет в заголовке X-VM-Secret (per-VM).
+// от бесправного пользователя. Auth — секрет в заголовке (DefaultVMSecretHeader
+// или перекрыт через config.webhook.secret_header), per-VM.
 type WebhookClient struct {
-	client *http.Client
+	client       *http.Client
+	secretHeader string
 }
 
-func NewWebhookClient() *WebhookClient {
-	return &WebhookClient{client: &http.Client{Timeout: 15 * time.Second}}
+// NewWebhookClient — timeout задаёт HTTP-таймаут, secretHeader — имя
+// HTTP-заголовка для вебхук-секрета ВМ.
+func NewWebhookClient(timeout time.Duration, secretHeader string) *WebhookClient {
+	return &WebhookClient{
+		client:       &http.Client{Timeout: timeout},
+		secretHeader: secretHeader,
+	}
 }
 
 // rawPodmanContainer — селективный подмножество полей `podman ps --format json`.
@@ -79,7 +86,7 @@ func (w *WebhookClient) fetchContainers(vm VMConfig, endpoint string) ([]rawPodm
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-VM-Secret", vm.Secret)
+	req.Header.Set(w.secretHeader, vm.Secret)
 
 	resp, err := w.client.Do(req)
 	if err != nil {
@@ -151,7 +158,7 @@ func normalizeContainer(c rawPodmanContainer, vm VMConfig) ContainerInfo {
 	}
 
 	// Имя: по умолчанию реальное имя без префикса systemd-.
-	info.Name = strings.TrimPrefix(realName, "systemd-")
+	info.Name = strings.TrimPrefix(realName, ContainerSystemdPrefix)
 	// Срезаем ведущий нумерационный префикс вида "01-athens" -> "athens".
 	if parts := strings.SplitN(info.Name, "-", 2); len(parts) == 2 {
 		if _, err := strconv.Atoi(parts[0]); err == nil {

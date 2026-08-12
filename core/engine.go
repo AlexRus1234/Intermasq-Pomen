@@ -30,26 +30,44 @@ import (
 // Caddy и Webhook держит через интерфейсы (CaddyAPI/WebhookAPI), что позволяет
 // подменять их моками в тестах Engine без поднятия реальной инфраструктуры.
 type Engine struct {
-	Caddy   CaddyAPI
-	State   *StateStore
-	VMs     *VMStore
-	Webhook WebhookAPI
-	Domain  string
-	Nodes   map[string]NodeConfig
+	Caddy        CaddyAPI
+	State        *StateStore
+	VMs          *VMStore
+	Webhook      WebhookAPI
+	Domain       string
+	Nodes        map[string]NodeConfig
+	WebhookPath  string
+	RestartDelay time.Duration
 }
 
-func NewEngine(caddy CaddyAPI, state *StateStore, vms *VMStore, wh WebhookAPI, domain string, nodes map[string]NodeConfig) *Engine {
+// EngineOptions — именованные параметры для NewEngine. Positional-сигнатура
+// разрослась бы до 8+ аргументов, struct — читаемее и обратно-совместима
+// при добавлении новых полей.
+type EngineOptions struct {
+	Caddy        CaddyAPI
+	State        *StateStore
+	VMs          *VMStore
+	Webhook      WebhookAPI
+	Domain       string
+	Nodes        map[string]NodeConfig
+	WebhookPath  string
+	RestartDelay time.Duration
+}
+
+func NewEngine(opts EngineOptions) *Engine {
 	cleanNodes := make(map[string]NodeConfig)
-	for k, v := range nodes {
+	for k, v := range opts.Nodes {
 		cleanNodes[strings.ToLower(k)] = v
 	}
 	return &Engine{
-		Caddy:   caddy,
-		State:   state,
-		VMs:     vms,
-		Webhook: wh,
-		Domain:  domain,
-		Nodes:   cleanNodes,
+		Caddy:        opts.Caddy,
+		State:        opts.State,
+		VMs:          opts.VMs,
+		Webhook:      opts.Webhook,
+		Domain:       opts.Domain,
+		Nodes:        cleanNodes,
+		WebhookPath:  opts.WebhookPath,
+		RestartDelay: opts.RestartDelay,
 	}
 }
 
@@ -86,7 +104,7 @@ func (e *Engine) GetContainers(vmName string) ([]ContainerInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	return e.Webhook.ListContainers(vm, "/hooks/podman")
+	return e.Webhook.ListContainers(vm, e.WebhookPath)
 }
 
 // Provision выдаёт домен контейнеру: пишет маршрут в Caddy и запись в state.
@@ -115,9 +133,9 @@ func (e *Engine) Provision(c ContainerInfo) (string, error) {
 	vmName := strings.ToLower(c.VMName)
 	nodeKey := strings.ToLower(c.Node)
 
-	domain := fmt.Sprintf("%s.%s.%s%s", name, vmName, nodeKey, e.Domain)
-	routeID := fmt.Sprintf("pod-%s-%s-%s", vmName, name, nodeKey)
-	tlsID := fmt.Sprintf("podtls-%s-%s-%s", vmName, name, nodeKey)
+	domain := fmt.Sprintf(FQDNFormat, name, vmName, nodeKey, e.Domain)
+	routeID := fmt.Sprintf(RouteIDFormat, vmName, name, nodeKey)
+	tlsID := fmt.Sprintf(TLSIDFormat, vmName, name, nodeKey)
 
 	// ReplayRoute использует upsertByID: GET /id/<id> → PUT если существует,
 	// иначе POST с инициализацией родительского пути. Это гарантирует, что
@@ -233,7 +251,7 @@ func (e *Engine) ReplayCaddy() (int, []string, error) {
 		touchedNodes[rec.Node] = true
 	}
 
-	time.Sleep(2 * time.Second)
+	time.Sleep(e.RestartDelay)
 	for node := range touchedNodes {
 		if err := e.Caddy.RestartCaddy(node); err != nil {
 			errors = append(errors, fmt.Sprintf("рестарт %s: %v", node, err))

@@ -69,17 +69,12 @@ func webUIHandler() http.HandlerFunc {
 	}
 }
 
-type Config struct {
-	BaseDomain string                     `json:"base_domain"`
-	Nodes      map[string]core.NodeConfig `json:"nodes"`
-}
-
-func loadConfig(path string) (*Config, error) {
+func loadConfig(path string) (*core.Config, error) {
 	file, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	var cfg Config
+	var cfg core.Config
 	err = json.Unmarshal(file, &cfg)
 	return &cfg, err
 }
@@ -93,16 +88,17 @@ func main() {
 		return
 	}
 
-	cfg, err := loadConfig("config.json")
+	rawCfg, err := loadConfig("config.json")
 	if err != nil {
 		log.Fatalf("Ошибка чтения config.json: %v", err)
 	}
+	cfg := rawCfg.WithDefaults()
 
 	caddyURLs := make(map[string]string)
 	for name, data := range cfg.Nodes {
 		caddyURLs[name] = data.CaddyURL
 	}
-	caddyClient := core.NewCaddyClient(caddyURLs)
+	caddyClient := core.NewCaddyClient(caddyURLs, cfg.TLS, cfg.CaddyTimeout)
 
 	statePath := os.Getenv("STATE_FILE")
 	if statePath == "" {
@@ -116,9 +112,18 @@ func main() {
 	}
 	vmStore := core.NewVMStore(vmsPath)
 
-	webhookClient := core.NewWebhookClient()
+	webhookClient := core.NewWebhookClient(cfg.WebhookTimeout, cfg.Webhook.SecretHeader)
 
-	engine := core.NewEngine(caddyClient, stateStore, vmStore, webhookClient, cfg.BaseDomain, cfg.Nodes)
+	engine := core.NewEngine(core.EngineOptions{
+		Caddy:        caddyClient,
+		State:        stateStore,
+		VMs:          vmStore,
+		Webhook:      webhookClient,
+		Domain:       cfg.BaseDomain,
+		Nodes:        cfg.Nodes,
+		WebhookPath:  cfg.Webhook.Path,
+		RestartDelay: cfg.RestartDelayDur,
+	})
 
 	mux := http.NewServeMux()
 	api.Register(mux, engine, webUIHandler())
