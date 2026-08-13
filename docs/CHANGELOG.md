@@ -18,8 +18,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 # Changelog
 
-Формат: каждый этап рефакторинга — отдельный раздел. Ссылки на коммиты —
-в git log.
+Формат: каждый этап рефакторинга выделен в отдельный раздел. Ссылки на коммиты
+приведены в журнале git.
 
 ## [Unreleased]
 
@@ -30,7 +30,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
   Сравнение с Povez, API, Структура проекта, Разработка, Стек, Лицензия).
 - `README.en.md` — английская версия.
 - `docs/INTERNALS.md` — внутренняя архитектура и обходные пути.
-- `docs/SETUP.md` — обновлён под `CONFIG_FILE`, dev-режим, embed web/, `/api/version`.
+- `docs/SETUP.md` — обновлён под `CONFIG_FILE`, режим разработки, embed web/, `/api/version`.
 - `docs/CHANGELOG.md` — этот файл.
 
 ### Этап 6 — Тесты
@@ -43,26 +43,26 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 - `tests/fixtures/caddy-mock/` + `tests/fixtures/webhook-mock/` — отдельные
   go.mod, эмулируют Caddy Admin API и вебхук ВМ для smoke.
 - `tests/lib/{state,common,http}.sh` — bash-хелперы по образцу Intermasq
-  (адаптированные: без auth, т.к. Pomen в dev-режиме не имеет auth proxy).
+  (адаптированные: без auth, т.к. Pomen в режиме разработки не имеет auth proxy).
 - `tests/suites/NN-*.sh` — 8 bash-сьют: preflight, version, nodes, vms-crud,
   containers, provision, deprovision, replay.
 - `tests/smoke.sh` — оркестратор.
 - `tests/known-bugs.txt` — пустой, по образцу Intermasq.
 - `tests/e2e/` — Playwright config + один UI-mount spec.
-- CI: активирован L3 smoke (поднимает mocks + pomen-ci в фоне, гоняет smoke.sh);
-  активирован L4 Playwright (opt-in через `run_e2e_tests=true`).
+- CI: активирован L3 smoke (запускает mocks и pomen-ci в фоне и выполняет
+  smoke.sh); активирован L4 Playwright (opt-in через `run_e2e_tests=true`).
 - `core/errors.go` — sentinel errors `ErrBadRequest`/`ErrNotFound`;
   handlers через `statusForError` переводят их в 400/404, прочее — в 500.
 - `main.go` — env `CONFIG_FILE` для override пути config.json.
 
-### Этап 5 — Вынос хардкода в конфиг
+### Этап 5 — Вынос жёстко заданных значений в конфигурацию
 
-- `core/constants.go` — все дефолты и шаблоны (DefaultCaddyTimeout,
+- `core/constants.go` — все значения по умолчанию и шаблоны (DefaultCaddyTimeout,
   DefaultWebhookTimeout, DefaultRestartDelay, DefaultWebhookPath,
   DefaultVMSecretHeader, FQDNFormat, RouteIDFormat, TLSIDFormat,
   ContainerSystemdPrefix).
 - `core/config.go` — `Config` с секциями `tls`/`webhook`/`timeouts`;
-  `WithDefaults()` применяет дефолты и парсит Duration.
+  `WithDefaults()` применяет значения по умолчанию и разбирает Duration.
 - `NewCaddyClient(urls, tlsCfg, timeout)`,
   `NewWebhookClient(timeout, secretHeader)`,
   `NewEngine(EngineOptions{...})` — все параметры через конфиг.
@@ -87,32 +87,34 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
   интерфейсы → можно мокать в тестах.
 - `log/slog` вместо `fmt.Printf` для структурированного логирования.
 - `api/register.go` — единая точка регистрации роутов `Register(mux, engine,
-  version, ui)` по образцу матери. `ApiServer` → `Server` (Go-конвенция).
-- `//go:embed web` — UI встраивается в бинарь, нет зависимости от CWD. JS
-  вынесен в `web/app.js`, HTML в `web/index.html`.
+  version, ui)` по образцу хост-панели. `ApiServer` → `Server` (Go-конвенция).
+- `//go:embed web` — интерфейс встраивается в исполняемый файл, зависимость от
+  CWD отсутствует. JS вынесен в `web/app.js`, HTML в `web/index.html`.
 - Engine: компенсация при частичных отказах. Provision при ошибке
   RestartCaddy откатывает через DeleteRouteAndTLS; Deprovision теперь
   state-first (Caddy-удаление best-effort).
 
-### Этап 3 — Костыли и мёртвый код
+### Этап 3 — Устранение обходных путей и неиспользуемого кода
 
-- Удалён мёртвый `CaddyClient.AddRoute` (77 строк, не вызывался).
-- `NewCaddyClient` больше не мутирует входной map (копирует).
-- `slices.DeleteFunc` вместо трюка `records[:0]` в StateStore/VMStore.
-- `upsertByID` различает первичный 500 (init parent + retry) и вторичный
-  (реальная ошибка Caddy): в ошибке показывает оба тела ответа.
-- `webhook.go` — подробный комментарий про обход adnanh/webhook empty body.
-- `web/app.js` — `getPluginBase()`/`getAuthToken()` с явной обработкой
-  production/dev/cross-origin сценариев.
+- Удалён неиспользуемый `CaddyClient.AddRoute` (77 строк, не вызывался).
+- `NewCaddyClient` более не изменяет входной map (создаёт копию).
+- `slices.DeleteFunc` вместо приёма `records[:0]` в StateStore/VMStore.
+- `upsertByID` различает первичный ответ 500 (инициализация родителя и повтор)
+  и вторичный (фактическая ошибка Caddy): в сообщении об ошибке приводятся оба
+  тела ответа.
+- `webhook.go` — добавлен подробный комментарий об обходе требования
+  adnanh/webhook к наличию тела запроса.
+- `web/app.js` — функции `getPluginBase()`/`getAuthToken()` с явной обработкой
+  сценариев production/dev/cross-origin.
 
 ### Этап 2 — Критические баги
 
 - `StateStore` — добавлен `sync.Mutex` (раньше был без мьютекса, data race
   при параллельных Provision/Replay).
-- `GET /api/vms` — DTO `VMView` без `Secret`. Раньше секрет утекал в API.
-- `main.go` — убран TCP-fallback `:5001`, добавлен явный dev-режим
+- `GET /api/vms` — DTO `VMView` без `Secret`. Ранее секрет был доступен через API.
+- `main.go` — убран TCP-fallback `:5001`, добавлен явный режим разработки
   `POMEN_DEV_PORT`. Graceful shutdown через `http.Server.Shutdown(ctx)`
-  с кодом возврата 0 (раньше `os.Exit(1)` на SIGTERM).
+  с кодом возврата 0 (ранее `os.Exit(1)` на SIGTERM).
 - `socket_unix.go` — umask до Listen, чтобы права сокета были 0770 atomically.
 - `caddy.go` — закрытие `resp.Body` + проверка err во всех вызовах Caddy API.
 - UI — `domainExample` вычисляет node из выбранной ВМ (`<name>.<vm>.<node>.internal`).
@@ -131,7 +133,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 - AGPL-3.0 вместо заявленного Apache-2.0.
 - `LICENSE` (полный текст AGPL-3.0).
-- `SECURITY.md` — политика безопасности (RU+EN) по образцу матери.
+- `SECURITY.md` — политика безопасности (RU+EN) по образцу Intermasq.
 - AGPL-header на все 12 исходников (`.go` → `//`, `.md`/`.html` → `<!-- -->`).
 - `manifest.json` — добавлено поле `"version"`.
 - `.gitignore` переписан по образцу Intermasq.

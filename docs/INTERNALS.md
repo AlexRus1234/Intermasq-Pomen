@@ -18,10 +18,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 # Внутренняя архитектура Pomen
 
-Этот документ описывает, как Pomen устроен внутри: слой пакетов, потоки
-данных, известные обходные пути (с пояснением, почему они нужны) и
-тестовую инфраструктуру. Аудитория — разработчики, сопровождающие код; для
-пользователей и админов есть [FEATURES.md](FEATURES.md) и [SETUP.md](SETUP.md).
+Документ описывает внутреннее устройство Pomen: послойную организацию пакетов,
+потоки данных, известные обходные пути (с обоснованием причин их применения) и
+тестовую инфраструктуру. Адресат — разработчики, сопровождающие исходный код;
+для пользователей и администраторов предназначены [FEATURES.md](FEATURES.md) и
+[SETUP.md](SETUP.md).
 
 ## Содержание
 
@@ -46,75 +47,84 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
               │  (Server,  │            │   version    │
               │  Register) │            │  (ldflags)   │
               └─────┬──────┘            └──────────────┘
-                    │ вызывает
-                    ▼
-        ┌───────────────────────────────────────┐
-        │                core                   │
-        │  ┌───────────┐  ┌───────────┐         │
-        │  │  Engine   │──│ Interfaces│         │
-        │  └─────┬─────┘  └───────────┘         │
-        │        │ depends on (via interface)   │
-        │  ┌─────┴────────────┬──────────────┐  │
-        │  ▼                  ▼              ▼  │
-        │ CaddyClient    WebhookClient   Stores │
-        │ (Admin API)    (HTTP+podman)   (JSON) │
-        └───────────────────────────────────────┘
+                     │ вызывает
+                     ▼
+         ┌───────────────────────────────────────┐
+         │                core                   │
+         │  ┌───────────┐  ┌───────────┐         │
+         │  │  Engine   │──│ Interfaces│         │
+         │  └─────┬─────┘  └───────────┘         │
+         │        │ depends on (via interface)   │
+         │  ┌─────┴────────────┬──────────────┐  │
+         │  ▼                  ▼              ▼  │
+         │ CaddyClient    WebhookClient   Stores │
+         │ (Admin API)    (HTTP+podman)   (JSON) │
+         └───────────────────────────────────────┘
 ```
 
-- **main** — точка входа. Парсит env (`PLUGIN_SOCKET`, `POMEN_DEV_PORT`,
-  `CONFIG_FILE`, `STATE_FILE`, `VMS_FILE`), грузит `config.json`, собирает
-  Engine и навешивает handlers через `api.Register`. Платформо-зависимый
-  запуск сокета вынесен в `socket_{unix,windows}.go`.
-- **api** — HTTP-слой. `Server` оборачивает Engine; `Register(mux, engine,
-  version, ui)` — единая точка навешивания handlers (по образцу
-  `webapi.Register` в Intermasq). VMView (DTO без Secret) живет здесь же.
-- **core** — домен. Engine оркестрирует Provision/Deprovision/Replay через
-  интерфейсы `CaddyAPI`/`WebhookAPI`; конкретные реализации — `CaddyClient`
-  и `WebhookClient`. Хранилища — `StateStore` и `VMStore` поверх generic
-  `JSONStore[T]`.
-- **internal/version** — единственное место, где лежит `var Version`. CI
-  инжектит туда версию через `-ldflags="-X pomen/internal/version.Version=…"`.
+- **main** — точка входа. Выполняет разбор переменных окружения (`PLUGIN_SOCKET`,
+  `POMEN_DEV_PORT`, `CONFIG_FILE`, `STATE_FILE`, `VMS_FILE`), загрузку
+  `config.json`, сборку Engine и подключение обработчиков через `api.Register`.
+  Платформенно-зависимый запуск сокета вынесен в `socket_{unix,windows}.go`.
+- **api** — HTTP-слой. Структура `Server` оборачивает Engine;
+  `Register(mux, engine, version, ui)` — единая точка подключения обработчиков
+  (по образцу `webapi.Register` в Intermasq). Структура `VMView` (DTO без
+  секрета) определена в этом же пакете.
+- **core** — доменный слой. Engine координирует операции
+  Provision/Deprovision/Replay через интерфейсы `CaddyAPI`/`WebhookAPI`;
+  конкретные реализации — `CaddyClient` и `WebhookClient`. Хранилища
+  `StateStore` и `VMStore` построены на основе обобщённого `JSONStore[T]`.
+- **internal/version** — единственное расположение переменной `var Version`.
+  CI внедряет значение версии посредством
+  `-ldflags="-X pomen/internal/version.Version=…"`.
 
 ## Жизненный цикл Provision
 
 `POST /api/provision {vm, container_name}` → `Engine.Provision`:
 
-1. **Валидация.** `c.Port == ""` → `ErrBadRequest`; unknown node → `ErrBadRequest`.
-   Эти ошибки handler переводит в HTTP 400.
-2. **Вычисление ID/домена** по шаблонам из `core/constants.go`:
+1. **Валидация.** При `c.Port == ""` возвращается `ErrBadRequest`; при
+   неизвестном узле — `ErrBadRequest`. Эти ошибки преобразуются обработчиком в
+   HTTP 400.
+2. **Вычисление идентификаторов и домена** по шаблонам из
+   `core/constants.go`:
    `domain = fmt.Sprintf(FQDNFormat, name, vm, node, baseDomain)`,
    `routeID = pod-<vm>-<name>-<node>`,
    `tlsID = podtls-<vm>-<name>-<node>`.
-3. **`Caddy.ReplayRoute`** — пишет TLS-политику и маршрут в Caddy через
-   `upsertByID` (см. [Replay vs Add](#replay-vs-add-почему-upsert)).
-4. **`Caddy.RestartCaddy`** — `/stop` + расчёт на `systemd Restart=always`
-   (см. [The Nuke](#the-nuke-caddy-stop--systemd-restartalways)).
-   При ошибке — попытка компенсации через `DeleteRouteAndTLS`.
-5. **`State.Upsert`** — запись в routes.json. При ошибке Caddy уже настроен:
-   домен фактически жив, но невидим в UI. Логируется `slog.Error`.
+3. **`Caddy.ReplayRoute`** — помещает политику TLS и маршрут в Caddy методом
+   `upsertByID` (см. [Upsert вместо прямого добавления](#upsert-вместо-прямого-добавления)).
+4. **`Caddy.RestartCaddy`** — запрос `/stop` и полагание на параметр systemd
+   `Restart=always`
+   (см. [Принудительный перезапуск Caddy](#принудительный-перезапуск-caddy)).
+   При ошибке выполняется попытка компенсации через `DeleteRouteAndTLS`.
+5. **`State.Upsert`** — запись в `routes.json`. При ошибке конфигурация Caddy
+   уже применена: домен фактически работоспособен, но не отображается в
+   интерфейсе; ошибка фиксируется в журнале через `slog.Error`.
 
-При успехе возвращается `200 {"message":"Успех! <domain> -> <ip>:<port>"}`.
+При успешном выполнении возвращается
+`200 {"message":"Успех! <domain> -> <ip>:<port>"}`.
 
 ## Хранилище: JSONStore\[T\]
 
-`StateStore` и `VMStore` до рефакторинга копировали один и тот же
-load/save/atomic-rename/mutex код (~60 строк). После — оба встраивают
-`*JSONStore[T]`:
+До рефакторинга `StateStore` и `VMStore` дублировали один и тот же код
+загрузки/сохранения/атомарного переименования/мьютекса (около 60 строк). После
+рефакторинга оба хранилища встраивают `*JSONStore[T]`:
 
 ```go
 type StateStore struct { *JSONStore[RouteRecord] }
 type VMStore     struct { *JSONStore[VMConfig]   }
 ```
 
-`JSONStore[T]` предоставляет `Load()`, `Save()` (с мьютексом) и приватные
-`load()/save()` для использования внутри критических секций стор'а
-(`Upsert`/`Remove` сами берут `locker()` и читают-модифицируют-пишут).
-Атомарность записи — tmp-файл + `os.Rename`, поэтому при сбое посреди записи
-остаётся либо старое содержимое, либо новое, но никогда половинчатое.
+`JSONStore[T]` предоставляет методы `Load()`, `Save()` (с мьютексом) и
+приватные `load()/save()` для использования внутри критических секций хранилища
+(методы `Upsert`/`Remove` самостоятельно получают блокировку и выполняют чтение
+— изменение — запись). Атомарность сохранения обеспечивается временным файлом
+и `os.Rename`, поэтому в случае сбоя посредине записи остаётся либо прежнее,
+либо новое содержимое, но никогда не частичное.
 
 ## Изоляция для тестов: интерфейсы
 
-Engine держит Caddy и Webhook через интерфейсы, не через конкретные типы:
+Engine обращается к Caddy и вебхуку через интерфейсы, а не через конкретные
+типы:
 
 ```go
 type CaddyAPI interface {
@@ -125,75 +135,85 @@ type CaddyAPI interface {
 type WebhookAPI interface { ListContainers(...) ([]ContainerInfo, error) }
 ```
 
-Поэтому `core/engine_test.go` подменяет Caddy моком и проверяет бизнес-логику
-Provision/Deprovision без живого Caddy/вебхука. Для интеграционных smoke-тестов
-есть отдельные fixture'ы — `tests/fixtures/caddy-mock/` и
-`tests/fixtures/webhook-mock/`, у каждого свой `go.mod`, чтобы не плодить
-dep-циклы с основным модулем.
+Благодаря этому в `core/engine_test.go` Caddy заменяется заглушкой, что
+позволяет проверять бизнес-логику Provision/Deprovision без работающих
+экземпляров Caddy и вебхука. Для интеграционных smoke-тестов предусмотрены
+отдельные компоненты — `tests/fixtures/caddy-mock/` и
+`tests/fixtures/webhook-mock/`, каждый с собственным `go.mod`, что исключает
+зависимостные циклы с основным модулем.
 
 ## Известные обходные пути
 
-### Replay vs Add (почему upsert)
+### Upsert вместо прямого добавления
 
-Изначально у CaddyClient было два метода: `AddRoute` (чистый POST) и
-`ReplayRoute` (upsert через `GET /id/<id>` → PUT если есть, иначе POST).
-`AddRoute` оказался мёртвым кодом и сломанным при повторном Provision того же
-домена: Caddy падал с `cannot apply more than one automation policy to host`.
-Сейчас удалён; `ReplayRoute` используется везде — он идемпотентен.
+Изначально в `CaddyClient` было два метода: `AddRoute` (непосредственный POST)
+и `ReplayRoute` (upsert через `GET /id/<id>` → PUT при наличии, иначе POST).
+`AddRoute` оказался неиспользуемым и при повторном вызове Provision для того же
+домена приводил к сбою Caddy с сообщением
+`cannot apply more than one automation policy to host`. Метод удалён;
+`ReplayRoute`, являющийся идемпотентным, применяется во всех сценариях.
 
-`upsertByID` дополнительно различает HTTP 500: если POST падает с 500, мы
-предполагаем «родительский путь не создан» (`/config/apps/tls/automation` или
-`/config/apps/http/servers/srv0`) и вызываем `initIfMissing` — PUT на
-родительский путь, затем повторяем POST. Если повторный POST тоже падает —
-возвращаем ошибку с обоими телами ответа (чтобы было что анализировать).
+Дополнительно `upsertByID` различает HTTP 500: если POST завершается с 500,
+предполагается отсутствие родительского контейнера
+(`/config/apps/tls/automation` или `/config/apps/http/servers/srv0`); в этом
+случае вызывается `initIfMissing` (PUT на родительский путь), после чего POST
+повторяется. При повторной ошибке POST возвращается ошибка с обоими телами
+ответа для последующего анализа.
 
-### The Nuke (Caddy /stop + systemd Restart=always)
+### Принудительный перезапуск Caddy
 
-После выпуска сертификата Caddy не всегда подхватывает его сразу через
-`reload` — кэш automation policy иногда залипает. Надёжный workaround: послать
-`POST /stop` — процесс падает, systemd с `Restart=always` поднимает его через
-секунду, Caddy перечитывает `autosave.json` с чистого листа.
+После выпуска сертификата Caddy не всегда применяет его немедленно при
+перезагрузке: кэш политик автоматизации может сохранять устаревшее состояние.
+Надёжное решение — направить `POST /stop`: процесс завершается, systemd с
+параметром `Restart=always` перезапускает его, после чего Caddy перечитывает
+`autosave.json` с чистого состояния.
 
-Цена — даунтайм ~1-2 секунды на ноде. В Pomen это приемлемо: Provision —
-ручная операция, обычно 1-2 раза в день; автоматический фоновый reload сейчас
-не покрывает все кейсы.
+Цена — кратковременный (около 1–2 секунд) перерыв в обслуживании узла. Для
+Pomen это допустимо: Provision представляет собой ручную операцию, выполняемую
+обычно 1–2 раза в день; автоматическая фоновая перезагрузка на текущем этапе
+охватывает не все сценарии.
 
-### adnanh/webhook требует пустой JSON-body
+### Требование adnanh/webhook к телу запроса
 
-`adnanh/webhook` падает с `unsupported content type` **до** проверки
-`trigger-rule`, если у запроса нет body. Поэтому `WebhookClient` шлёт не `nil`,
-а `bytes.NewBufferString("{}")` с заголовком `Content-Type: application/json`.
-Когда/если перейдём на другой вебхук-демон, body можно убрать. Подробнее — в
-комментарии в `core/webhook.go`, `fetchContainers`.
+`adnanh/webhook` возвращает `unsupported content type` **до** проверки
+`trigger-rule`, если у запроса отсутствует тело. Поэтому `WebhookClient`
+отправляет не `nil`, а `bytes.NewBufferString("{}")` с заголовком
+`Content-Type: application/json`. При переходе на иной вебхук-демон тело
+можно удалить. Подробности — в комментарии к функции `fetchContainers` в
+`core/webhook.go`.
 
-### State-first Deprovision
+### Удаление с приоритетом состояния (state-first Deprovision)
 
-`DeprovisionByID` сначала удаляет запись из `state.json`, потом best-effort
-`Caddy.DeleteRouteAndTLS`. Обратный порядок (Caddy → state) при сбое
-`state.Remove` оставлял бы «висящую» в state запись без домена в Caddy,
-которую потом нельзя повторно удалить (Caddy уже пуст).
+`DeprovisionByID` сначала удаляет запись из `state.json`, затем выполняет
+удаление в Caddy по принципу наилучшего усилия. Обратный порядок (Caddy →
+state) при сбое `state.Remove` оставлял бы в состоянии запись без
+соответствующего домена в Caddy, которую впоследствии невозможно удалить
+повторно (Caddy уже пуст).
 
-Caddy не транзакционен, поэтому при сбое Caddy-удаления в Caddy остаётся
-фантом — но при следующем `ReplayCaddy` он не вернётся в state (его там нет),
-и UI/state остаются консистентны.
+Caddy не поддерживает транзакции, поэтому при сбое удаления в Caddy в нём может
+остаться фантомная запись; однако при следующем `ReplayCaddy` она не будет
+возвращена в состояние (поскольку там отсутствует) — интерфейс и состояние
+остаются согласованнанными.
 
-### Rollback при ошибке RestartCaddy
+### Откат при ошибке RestartCaddy
 
-Если `ReplayRoute` успешен, но `RestartCaddy` падает — маршрут и TLS-политика
-уже в Caddy, но сертификат не применён. Engine пытается откатить: вызывает
-`DeleteRouteAndTLS` (best-effort, ошибки логируются внутри) и возвращает
-ошибку клиенту. Это не гарантирует полную чистоту (Caddy не транзакционен),
-но спасает от самого частого случая.
+Если `ReplayRoute` завершается успешно, но `RestartCaddy` возвращает ошибку,
+маршрут и политика TLS уже находятся в Caddy, однако сертификат не применён.
+Engine выполняет откат: вызывает `DeleteRouteAndTLS` (по принципу наилучшего
+усилия, ошибки фиксируются внутри) и возвращает ошибку клиенту. Полная очистка
+не гарантируется (Caddy нетранзакционен), однако наиболее частый случай
+обрабатывается.
 
-При ошибке `State.Upsert` (после успешного Caddy+restart) домен фактически
-жив, но невидим в UI — это логируется как `slog.Error`. Откатывать Caddy в
-этом случае не нужно (сертификат уже работает), а запись можно восстановить,
-пере-выдав домен (Upsert идемпотентен по `route_id`).
+При ошибке `State.Upsert` (после успешного применения Caddy и перезапуска)
+домен фактически работоспособен, но не отображается в интерфейсе; ошибка
+фиксируется как `slog.Error`. Откат Caddy в этом случае не требуется
+(сертификат уже действует), а запись может быть восстановлена повторным
+назначением домена (Upsert идемпотентен по `route_id`).
 
-### Sentinel errors (ErrBadRequest / ErrNotFound)
+### Сентинельные ошибки (ErrBadRequest / ErrNotFound)
 
-Слою API важно различать «клиент дал плохой запрос» (4xx) от «что-то сломалось
-внутри» (5xx). В `core/errors.go` определены:
+Слою API необходимо различать «некорректный запрос клиента» (4xx) и «внутренний
+сбой» (5xx). В `core/errors.go` определены:
 
 ```go
 var (
@@ -202,28 +222,32 @@ var (
 )
 ```
 
-`VMStore.Get/Upsert/Delete`, `Engine.AddVM/Provision/DeprovisionByID` и т.п.
-оборачивают их через `fmt.Errorf("%w: …", ErrBadRequest, …)`. В `api/routes.go`
-`statusForError(err)` проверяет `errors.Is` и возвращает 400/404/500. До этого
-любая ошибка давала 500, и smoke ловил 500 там, где semantically нужен был
-400 (нет port label) или 404 (несуществующий route_id).
+Методы `VMStore.Get/Upsert/Delete`, `Engine.AddVM/Provision/DeprovisionByID` и
+др. оборачивают их посредством `fmt.Errorf("%w: …", ErrBadRequest, …)`. В
+`api/routes.go` функция `statusForError(err)` выполняет проверку `errors.Is` и
+возвращает 400/404/500. До введения этого механизма любая ошибка приводила к
+500, и smoke-тесты фиксировали 500 там, где семантически требовался 400
+(отсутствует метка порта) или 404 (несуществующий `route_id`).
 
-### Cross-origin iframe (getPluginBase / getAuthToken)
+### Межисточниковый iframe (getPluginBase / getAuthToken)
 
-UI Pomen живёт в `<iframe>` внутри панели Intermasq. До рефакторинга фронт
-буквально делал `window.parent.location.origin` на верхнем уровне — это
-бросает `SecurityError` в cross-origin iframe и ломает bootstrap в dev-режиме.
+Интерфейс Pomen располагается в `<iframe>` внутри панели Intermasq. До
+рефакторинга фронтенд на верхнем уровне напрямую обращался к
+`window.parent.location.origin`, что в межисточниковом iframe вызывает
+`SecurityError` и нарушает работу bootstrap в режиме разработки.
 
-Теперь `web/app.js` использует хелперы `getPluginBase()` / `getAuthToken()` с
-`try/catch` и явными сценариями: production iframe, dev (тот же origin),
-cross-origin parent (fallback на тот же origin). Это закрывает и的开发-кейсы,
-и edge-кейсы blob/popup iframe.
+В настоящее время `web/app.js` использует вспомогательные функции
+`getPluginBase()` и `getAuthToken()` с конструкцией `try/catch` и явным
+разделением сценариев: рабочий iframe, разработка (тот же источник) и
+межисточниковый родитель (возврат к тому же источнику). Это закрывает как
+сценарии разработки, так и граничные случаи blob-/popup-iframe.
 
-### umask-based socket permissions
+### Права сокета через umask
 
-Unix-сокет создаётся через `net.Listen("unix", path)`. Если сделать `Chmod`
-**после** Listen — между вызовами есть race window, когда сокет доступен world
-(по umask). В `socket_unix.go` umask выставляется **до** Listen:
+Unix-сокет создаётся вызовом `net.Listen("unix", path)`. Если выполнить `Chmod`
+**после** `Listen`, между вызовами остаётся окно состязания, в течение которого
+сокет доступен всем (согласно umask). В `socket_unix.go` umask устанавливается
+**до** `Listen`:
 
 ```go
 oldUmask := syscall.Umask(0o007)   // → 0777 & ~0o007 = 0770
@@ -231,12 +255,14 @@ listener, err := net.Listen("unix", path)
 syscall.Umask(oldUmask)
 ```
 
-`socket_windows.go` — заглушка без umask (Windows не в production, только dev).
-`Chmod` после Listen оставлен как подстраховка.
+`socket_windows.go` — заглушка без umask (Windows применяется только для
+разработки, не для рабочего развёртывания). `Chmod` после `Listen` сохранён как
+дополнительная мера.
 
 ## Версионирование
 
-`internal/version.Version` — единственный источник истины. По умолчанию
-`"1.0.0-pre"`; CI инжектит через `-ldflags`. CI также обновляет `manifest.json`
-через `jq --arg v "${APP_VERSION}" '.version = $v'`, чтобы версии бинаря, API
-(`/api/version`) и `manifest.json` совпадали.
+`internal/version.Version` — единственный источник значения версии. По
+умолчанию `"1.0.0-pre"`; CI внедряет значение через `-ldflags`. CI также
+обновляет `manifest.json` командой
+`jq --arg v "${APP_VERSION}" '.version = $v'`, обеспечивая совпадение версий
+исполняемого файла, API (`/api/version`) и `manifest.json`.

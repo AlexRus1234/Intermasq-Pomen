@@ -20,19 +20,23 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 ## 1. Требования
 
-- Работающий **Intermasq** с поддержкой плагинов (`/etc/intermasq/plugins/`).
-- **Caddy** на каждой ноде с настроенным Admin API (`:2019`) и Step-CA (см. документацию Povez).
-- **Wildcard DNS** в dnsmasq для каждой ноды: `address=/.yadr00.internal/172.20.5.3` (IP Caddy ноды).
-- **Вебхук adnanh/webhook** на каждой ВМ с контейнерами Podman (порт 9000 или любой).
+- Работоспособный **Intermasq** с поддержкой плагинов (`/etc/intermasq/plugins/`).
+- **Caddy** на каждом узле с настроенным Admin API (`:2019`) и Step-CA
+  (см. документацию Povez).
+- **Wildcard-запись DNS** в dnsmasq для каждого узла:
+  `address=/.yadr00.internal/172.20.5.3` (IP-адрес Caddy узла).
+- **Вебхук adnanh/webhook** на каждой виртуальной машине с контейнерами Podman
+  (порт 9000 или иной).
 - Podman запущен от того же пользователя, что и вебхук.
 
 ## 2. Установка плагина на сервер Intermasq
 
 ### 2.1 Перенос файлов
 
-Начиная с версии после рефакторинга UI встраивается в бинарь через `//go:embed web`
-(см. [INTERNALS.md](INTERNALS.md)) — отдельно копировать `index.html` / `app.js`
-не нужно, они уже внутри `pomen`:
+Начиная с версии после рефакторинга интерфейс встраивается в исполняемый файл
+директивой `//go:embed web` (см. [INTERNALS.md](INTERNALS.md)); отдельное
+копирование `index.html` и `app.js` не требуется, поскольку они уже входят в
+состав `pomen`:
 
 ```bash
 sudo mkdir -p /etc/intermasq/plugins/pomen
@@ -43,11 +47,12 @@ sudo cp config.example.json        /etc/intermasq/plugins/pomen/config.json
 sudo chown -R intermasq:intermasq  /etc/intermasq/plugins/pomen
 ```
 
-> `config.example.json` — шаблон с placeholder'ами. Копируем его в
-> `config.json` и редактируем под своё окружение (см. 2.2). Сам `config.json`
-> с продакшен-данными не коммитится в репозиторий и в `.gitignore`.
+> `config.example.json` — шаблон с подстановочными значениями. Его копируют в
+> `config.json` и редактируют применительно к целевому окружению (см. 2.2).
+> Сам `config.json` с рабочими данными в репозиторий не помещается и включён в
+> `.gitignore`.
 
-### 2.2 config.json (статика — ноды, Caddy, TLS, таймауты)
+### 2.2 config.json (статические параметры — узлы, Caddy, TLS, таймауты)
 
 `/etc/intermasq/plugins/pomen/config.json`:
 
@@ -65,22 +70,27 @@ sudo chown -R intermasq:intermasq  /etc/intermasq/plugins/pomen
 }
 ```
 
-- `base_domain` — суффикс всех доменов. FQDN = `<container>.<vm>.<node><base_domain>`.
-- `nodes` — map нод на URL их Caddy Admin API. **Те же, что в Povez.**
-- `tls` — параметры ACME-issuer'а для Caddy (по умолчанию внутренний Step-CA).
-- `webhook` — путь на вебхуке ВМ (`/hooks/podman` для adnanh/webhook) и имя
-  HTTP-заголовка для секрета.
-- `timeouts` — HTTP-таймауты Caddy/Webhook и пауза перед `/stop` в ReplayCaddy.
+- `base_domain` — суффикс всех доменов;
+  FQDN = `<container>.<vm>.<node><base_domain>`.
+- `nodes` — соответствие узлов URL их Caddy Admin API. **Те же, что и в Povez.**
+- `tls` — параметры издателя ACME для Caddy (по умолчанию внутренний Step-CA).
+- `webhook` — путь на вебхуке виртуальной машины (`/hooks/podman` для
+  adnanh/webhook) и имя HTTP-заголовка для передачи секрета.
+- `timeouts` — HTTP-таймауты Caddy и вебхука, а также пауза перед запросом
+  `/stop` в ReplayCaddy.
 
-Любую секцию кроме `base_domain` и `nodes` можно опустить — применятся дефолты
-из `core/constants.go`. Секретов ВМ тут **нет** — они в `vms.json`, добавляются
-через UI.
+Любую секцию, кроме `base_domain` и `nodes`, можно опустить — будут применены
+значения по умолчанию из `core/constants.go`. Секреты виртуальных машин в этом
+файле **не хранятся**; они размещаются в `vms.json` и добавляются через
+интерфейс.
 
-Путь к config можно перектуть через env `CONFIG_FILE` (по умолчанию `config.json`
-рядом с бинарем).
+Путь к конфигурации можно переопределить переменной окружения `CONFIG_FILE` (по
+умолчанию `config.json` рядом с исполняемым файлом).
 
 ### 2.3 manifest.json
-Уже в комплекте:
+
+Уже содержится в комплекте:
+
 ```json
 {
     "id": "pomen",
@@ -89,49 +99,59 @@ sudo chown -R intermasq:intermasq  /etc/intermasq/plugins/pomen
     "bin": "pomen"
 }
 ```
-Поле `version` обновляется автоматически при сборке в CI (через `jq`),
-совпадает с тем, что отдаёт `GET /api/version` и `--version`.
 
-Intermasq при старте сам:
-- найдёт `/etc/intermasq/plugins/pomen/manifest.json`
-- запустит `pomen` как дочерний процесс
-- передаст `PLUGIN_SOCKET=/run/intermasq/sockets/pomen.sock`
-- проксирует `/plugins/pomen/*` на этот сокет
+Поле `version` обновляется автоматически при сборке в CI (через `jq`) и
+совпадает со значением, возвращаемым `GET /api/version` и `--version`.
+
+При запуске Intermasq автоматически:
+
+- обнаруживает `/etc/intermasq/plugins/pomen/manifest.json`;
+- запускает `pomen` как дочерний процесс;
+- передаёт `PLUGIN_SOCKET=/run/intermasq/sockets/pomen.sock`;
+- проксирует `/plugins/pomen/*` на этот сокет.
 
 ### 2.4 Перезапуск Intermasq
+
 ```bash
 sudo systemctl restart intermasq
 sudo journalctl -u intermasq --since "1 min ago" | grep PLUGINS
 ```
-Должно появиться: `[PLUGINS] Started Pomen on socket /run/intermasq/sockets/pomen.sock`.
 
-### 2.5 Доступ к UI
+В журнале должна появиться запись:
+`[PLUGINS] Started Pomen on socket /run/intermasq/sockets/pomen.sock`.
+
+### 2.5 Доступ к интерфейсу
+
 ```
 http://<IP_INTERMASQ>:8080/plugins/pomen/
 ```
 
-В заголовке UI отображается версия сборки — это быстрый sanity-check, что
-запущен ожидаемый бинарь.
+В заголовке интерфейса отображается версия сборки — это удобная проверка того,
+что запущен ожидаемый исполняемый файл.
 
-### 2.6 Альтернатива: dev-режим без Intermasq
+### 2.6 Альтернатива: режим разработки без Intermasq
 
 Для локальной разработки или smoke-тестов Pomen можно запустить вне хоста:
 
 ```bash
-cp config.example.json config.json       # отредактируй под своё окружение
-POMEN_DEV_PORT=18992 ./pomen             # listens on TCP :18992, без unix-сокета
+cp config.example.json config.json       # отредактируйте применительно к окружению
+POMEN_DEV_PORT=18992 ./pomen             # прослушивает TCP :18992, без unix-сокета
 curl http://127.0.0.1:18992/api/version
 ```
 
 `POMEN_DEV_PORT` — единственный способ запустить Pomen в обход контракта
-Intermasq. В этом режиме **нет auth proxy** — не используй в production.
+Intermasq. В этом режиме **прокси аутентификации отсутствует**; не используйте
+его в рабочем окружении.
 
-## 3. Настройка вебхука на ВМ
+## 3. Настройка вебхука на виртуальной машине
 
-На каждой ВМ с Podman должен быть запущен `adnanh/webhook` с хуком `podman`.
+На каждой виртуальной машине с Podman должен быть запущен `adnanh/webhook` с
+хуком `podman`.
 
-### 3.1 hooks-файл для Pomen
-Создай отдельный файл (не мешая боевым хукам git-sync):
+### 3.1 Файл хуков для Pomen
+
+Создайте отдельный файл, не затрагивая рабочие хуки git-sync:
+
 ```bash
 cat > /opt/appdata/config/webhook/pomen-hooks.json <<'EOF'
 [
@@ -160,7 +180,10 @@ EOF
 ```
 
 ### 3.2 Подключение к запуску вебхука
-Если вебхук уже запущен с одним hooks-файлом — добавь второй через override:
+
+Если вебхук уже запущен с одним файлом хуков, добавьте второй через
+переопределение:
+
 ```bash
 mkdir -p ~/.config/systemd/user/webhook.service.d
 cat > ~/.config/systemd/user/webhook.service.d/override.conf <<'EOF'
@@ -175,32 +198,40 @@ systemctl --user status webhook
 ```
 
 ### 3.3 Проверка
+
 С сервера Intermasq:
+
 ```bash
 curl -X POST -H 'X-VM-Secret: ТВОЙ_СЕКРЕТ' -H 'Content-Type: application/json' -d '{}' http://IP_VM:9000/hooks/podman
 ```
-Должен вернуться JSON-массив контейнеров от `podman ps --format json`.
 
-> **Важно:** в curl используй **одинарные кавычки** для заголовка с секретом, если в секрете есть `$` — иначе bash раскроет его как переменную.
+В ответ должен вернуться JSON-массив контейнеров, формируемый командой
+`podman ps --format json`.
 
-## 4. Регистрация ВМ в UI Pomen
+> **Важно:** в curl используйте **одинарные кавычки** для заголовка с секретом;
+  при наличии в секрете символа `$` двойные кавычки привели бы к подстановке
+  переменной оболочкой.
 
-1. Открой UI: `http://<IP_INTERMASQ>:8080/plugins/pomen/`
-2. Вкладка **«Виртуальные машины»** → форма «Добавить ВМ»:
+## 4. Регистрация виртуальных машин в интерфейсе Pomen
+
+1. Откройте интерфейс: `http://<IP_INTERMASQ>:8080/plugins/pomen/`.
+2. На вкладке **«Виртуальные машины»** заполните форму «Добавить ВМ»:
 
 | Поле | Пример | Описание |
 |---|---|---|
-| Имя | `obshaga` | Уникальное имя ВМ (регистронезависимое) |
-| Нода | `yadr00` | Дропдаун из config.json |
-| IP | `172.20.5.17` | IP ВМ в сети |
-| Webhook URL | `http://172.20.5.17:9000` | URL вебхука ВМ |
+| Имя | `obshaga` | Уникальное имя виртуальной машины (без учёта регистра) |
+| Узел | `yadr00` | Выбор из config.json |
+| IP | `172.20.5.17` | IP-адрес виртуальной машины в сети |
+| Webhook URL | `http://172.20.5.17:9000` | URL вебхука виртуальной машины |
 | Секрет | `nP$JANUTx^#39dKzs3LQ` | Значение `value` из pomen-hooks.json |
 
-3. Жми «Добавить». Запись попадёт в `/etc/intermasq/plugins/pomen/vms.json`.
+3. Нажмите «Добавить». Запись будет помещена в
+   `/etc/intermasq/plugins/pomen/vms.json`.
 
-## 5. Labels в .container (Quadlet)
+## 5. Метки в .container (Quadlet)
 
-Параметры проксирования берутся из labels контейнера. В Quadlet-файл (`*.container`):
+Параметры проксирования определяются метками контейнера. В файле Quadlet
+(`*.container`):
 
 ```ini
 [Container]
@@ -211,46 +242,54 @@ Label=port-8080
 Label=proto-http
 ```
 
-| Label | Обязательность | Описание |
+| Метка | Обязательность | Описание |
 |---|---|---|
-| `name-<имя>` | Нет | Переопределяет имя домена. По умолчанию берётся из имени контейнера с обрезкой префикса `systemd-` и нумерации (`systemd-01-athens` → `athens`). |
-| `port-<порт>` | Нет | Переопределяет порт upstream. По умолчанию берётся первый `host_port` из `Ports` вывода `podman ps`. |
-| `proto-<http/https>` | Нет | Протокол upstream. По умолчанию `http`. При `https` добавляется `insecure_skip_verify`. |
+| `name-<имя>` | Нет | Переопределяет имя домена. По умолчанию берётся из имени контейнера с удалением префикса `systemd-` и нумерации (`systemd-01-athens` → `athens`). |
+| `port-<порт>` | Нет | Переопределяет порт восходящего потока. По умолчанию берётся первый `host_port` из `Ports` вывода `podman ps`. |
+| `proto-<http/https>` | Нет | Протокол восходящего потока. По умолчанию `http`; при `https` добавляется `insecure_skip_verify`. |
 
-Если label не указан — плагин использует значения по умолчанию из `podman ps`.
+Если метка не указана, плагин использует значения по умолчанию из `podman ps`.
 
-## 6. Wildcard DNS в dnsmasq
+## 6. Wildcard-запись DNS в dnsmasq
 
-Для каждой ноды, где стоит Caddy, в `/etc/dnsmasq.d/`:
+Для каждого узла с установленным Caddy добавьте в `/etc/dnsmasq.d/`:
+
 ```ini
 address=/.yadr00.internal/172.20.5.3
 address=/.yadr01.internal/172.20.6.3
 ```
-Перезапуск dnsmasq через Intermasq (кнопка Reload).
+
+Затем перезапустите dnsmasq через Intermasq (кнопка Reload).
 
 Проверка:
+
 ```bash
 dig athens.obshaga.yadr00.internal
 ```
-Должен вернуть IP Caddy ноды (`172.20.5.3`).
 
-## 7. Caddy (на каждой ноде)
+Должен быть возвращён IP-адрес Caddy узла (`172.20.5.3`).
 
-Требования к Caddy — **те же, что в Povez**:
-- Admin API на `:2019`
-- Глобальная настройка Step-CA как ACME CA
-- `Restart=always` в systemd unit (для "the nuke" — `/stop` + автоподъём)
-- Root CA Step-CA в `/etc/caddy/root_ca.crt`
+## 7. Caddy (на каждом узле)
+
+Требования к Caddy **те же, что и в Povez**:
+
+- Admin API на `:2019`;
+- глобальная настройка Step-CA в качестве ACME CA;
+- `Restart=always` в системном юните (для принудительного перезапуска —
+  запрос `/stop` с автоматическим восстановлением процесса);
+- корневой сертификат Step-CA в `/etc/caddy/root_ca.crt`.
 
 Подробности — в документации Povez, раздел «Подготовка Caddy».
 
 ## 8. Первый запуск
 
-1. UI Pomen → «ВМ» → добавь ВМ (раздел 4).
-2. «Контейнеры» → выбери ВМ → «Обновить» → увидишь список контейнеров.
-3. Жми «Выдать домен» на нужном контейнере.
-4. «Маршруты» → проверь, что домен появился в таблице.
-5. Открой в браузере `https://<container>.<vm>.<node>.internal` — должен открыться сервис через Caddy с валидным TLS от Step-CA.
+1. В интерфейсе Pomen: «ВМ» → добавьте виртуальную машину (раздел 4).
+2. «Контейнеры» → выберите виртуальную машину → «Обновить» — отобразится список
+   контейнеров.
+3. Нажмите «Выдать домен» для требуемого контейнера.
+4. «Маршруты» → убедитесь, что домен появился в таблице.
+5. Откройте в браузере `https://<container>.<vm>.<node>.internal` — должен
+   открыться сервис через Caddy с действительным сертификатом Step-CA.
 
 ## 9. Обновление плагина
 
@@ -261,7 +300,8 @@ sudo chmod +x /etc/intermasq/plugins/pomen/pomen
 sudo chown intermasq:intermasq /etc/intermasq/plugins/pomen/pomen
 sudo systemctl start intermasq
 ```
-Состояние (`vms.json`, `routes.json`) сохраняется — ничего не теряется.
 
-После обновления проверь версию через `GET /api/version` или в заголовке UI —
-должна совпадать с тегом релиза.
+Состояние (`vms.json`, `routes.json`) сохраняется; данные не теряются.
+
+После обновления проверьте версию через `GET /api/version` или в заголовке
+интерфейса — она должна совпадать с тегом релиза.

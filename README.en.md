@@ -22,14 +22,16 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <h1>Pomen</h1>
 
-**Plugin for [Intermasq](../Intermasq) — issuing domains to Podman containers**
+**Plugin for [Intermasq](../Intermasq) — assigning domain names to Podman containers**
 
-Pomen runs as a child process of the Intermasq panel. On a UI button click it
-issues Podman containers (started via Quadlet inside VMs) domain names of the
-form `<container>.<vm>.<node>.internal` with HTTPS via Caddy. The data source
-is a webhook on the VM running `podman ps`; the Intermasq DNS zone is not
-touched — Host-header routing is handled by Caddy. Single binary, zero
-external dependencies.
+Pomen runs as a child process of the Intermasq panel. On an administrator
+request it assigns Podman containers (started via Quadlet inside virtual
+machines) domain names of the form
+`<container>.<vm>.<node>.internal` with HTTPS provided by Caddy. The data
+source is a webhook on the virtual machine that runs `podman ps`; the Intermasq
+DNS zone is not modified — Host-header routing is handled by Caddy. The plugin
+is distributed as a single self-contained executable without external
+dependencies.
 
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg?style=flat-square)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.25-00ADD8.svg?style=flat-square)](https://go.dev/)
@@ -62,23 +64,25 @@ external dependencies.
 ## Overview
 
 Pomen is a plugin for the [Intermasq](../Intermasq) panel. It does not run
-standalone: the host launches it via a unix socket and reverse-proxies
+standalone: the host launches it over a Unix socket and reverse-proxies
 `/plugins/pomen/*` onto that socket **after** host-level authentication.
 
-The goal: on a UI click, issue domain names to Podman containers started via
-Quadlet inside short-lived VMs. Under the hood:
+Its purpose is to assign domain names, on an administrator request, to Podman
+containers started via Quadlet inside short-lived virtual machines. Operation:
 
-- **On-demand pull:** no background network noise. Between clicks the plugin
-  is silent; on a click it calls the VM's webhook (adnanh/webhook), which runs
-  `podman ps --format json` and returns the container list.
-- **Caddy reverse_proxy:** a route is written to the node's Caddy Admin API;
-  TLS is issued via the internal Step-CA. The Intermasq DNS zone is untouched
-  — a single wildcard `address=/.<node>.internal/<caddy-ip>` in dnsmasq is
-  enough.
-- **Idempotent upsert:** re-provisioning the same container does not create a
+- **On-demand polling.** No background network traffic is generated: between
+  requests the plugin performs no calls. When the administrator clicks
+  "Refresh", the plugin calls the virtual machine's webhook (adnanh/webhook),
+  which runs `podman ps --format json` and returns the container list.
+- **Caddy reverse_proxy.** A route is written to the Caddy Admin API of the
+  relevant node; the TLS certificate is issued by the internal Step-CA. The
+  Intermasq DNS zone is not modified — a single wildcard
+  `address=/.<node>.internal/<caddy-ip>` in dnsmasq is sufficient.
+- **Idempotent upsert.** Re-provisioning the same container does not create a
   duplicate TLS policy in Caddy (see [docs/INTERNALS.md](docs/INTERNALS.md)).
-- **Single binary:** Go + Vue 3 + Bootstrap 5 in one ~10 MB file. The UI is
-  embedded via `//go:embed web`, so no external files are needed in production.
+- **Single executable.** The Go backend and the Vue 3 / Bootstrap 5 frontend
+  are combined into a single file of approximately 10 MB. The UI is embedded
+  through `//go:embed web`, so no external files are required in production.
 
 ## Quick start
 
@@ -88,41 +92,43 @@ Pomen is a plugin. The full installation guide for an Intermasq deployment is
 ### Requirements
 
 - Go 1.25+
-- Linux for production; Windows/macOS build but the unix socket only works on
-  POSIX (see `socket_unix.go` / `socket_windows.go`).
+- Linux for production; Windows and macOS can be built, but the Unix socket
+  only functions on POSIX systems (see `socket_unix.go` / `socket_windows.go`).
 
 ### Build
 
 ```bash
-make build          # local binary ./pomen
+make build          # local executable ./pomen
 make build-linux    # cross-compile for linux/amd64 → ./pomen-linux
 ```
 
 ### Production mode (under Intermasq)
 
-The binary is copied to `/etc/intermasq/plugins/pomen/`, the `manifest.json`
-declares the plugin to the host. The host passes `PLUGIN_SOCKET` via env and
-reverse-proxies `/plugins/pomen/*` to the socket. See [docs/SETUP.md](docs/SETUP.md).
+The executable is placed in `/etc/intermasq/plugins/pomen/`; `manifest.json`
+declares the plugin to the host. The host passes `PLUGIN_SOCKET` via an
+environment variable and reverse-proxies `/plugins/pomen/*` to the socket.
+See [docs/SETUP.md](docs/SETUP.md).
 
 ### Dev mode (local development without Intermasq)
 
 ```bash
-cp config.example.json config.json     # edit for your env
+cp config.example.json config.json     # edit for your environment
 POMEN_DEV_PORT=18992 ./pomen           # listens on TCP :18992
 curl http://127.0.0.1:18992/api/version
 ```
 
-`POMEN_DEV_PORT` replaces the old `:5001` fallback. It is now an explicit,
-separate mode without a unix socket — used only for local development and CI
+`POMEN_DEV_PORT` replaces the previous `:5001` fallback. It is now an explicit,
+separate mode without a Unix socket, used only for local development and CI
 smoke/E2E tests.
 
 ## Configuration
 
 ### `config.json`
 
-Place next to the binary (or point to it via `CONFIG_FILE`). Template —
-[`config.example.json`](config.example.json). Every section except `base_domain`
-and `nodes` can be omitted; defaults from `core/constants.go` apply.
+Place next to the executable (or point to it via `CONFIG_FILE`). The template
+is [`config.example.json`](config.example.json). Every section except
+`base_domain` and `nodes` can be omitted; the defaults from
+`core/constants.go` apply.
 
 ```json
 {
@@ -141,7 +147,7 @@ and `nodes` can be omitted; defaults from `core/constants.go` apply.
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `PLUGIN_SOCKET` | Unix socket path (set by Intermasq host) | — (required in prod) |
+| `PLUGIN_SOCKET` | Unix socket path (set by the Intermasq host) | — (required in production) |
 | `POMEN_DEV_PORT` | TCP port for dev mode (no socket) | — |
 | `CONFIG_FILE` | Path to config.json | `config.json` |
 | `STATE_FILE` | Path to routes.json | `/etc/intermasq/plugins/pomen/routes.json` |
@@ -151,37 +157,38 @@ See [`.env.example`](.env.example).
 
 ## Relationship with the host application
 
-Pomen follows the Intermasq plugin contract (see `docs/func/EN/plugins.md`
-in the host repo):
+Pomen follows the Intermasq plugin contract (see `docs/func/EN/plugins.md` in
+the host repository):
 
-1. `/etc/intermasq/plugins/pomen/` contains `manifest.json` + the binary.
+1. `/etc/intermasq/plugins/pomen/` contains `manifest.json` and the executable.
 2. The host launches the plugin as a child process and passes `PLUGIN_SOCKET`.
-3. The plugin listens on that unix socket with mode `0770`.
-4. The host mounts a reverse proxy on `/plugins/pomen/*` **after** its own auth.
-5. The UI mounts an `<iframe src="/plugins/pomen/">` — the frontend reads JWT
-   from `window.parent.localStorage`.
+3. The plugin listens on that Unix socket with mode `0770`.
+4. The host mounts a reverse proxy on `/plugins/pomen/*` **after** its own
+   authentication.
+5. The UI mounts an `<iframe src="/plugins/pomen/">`; the frontend reads the
+   JWT from `window.parent.localStorage`.
 
 The contract does not require the plugin to authenticate on its own — that is
 the host's responsibility. In dev mode (`POMEN_DEV_PORT`) the plugin runs
-without auth and without a socket.
+without authentication and without a socket.
 
 ## Comparison with Povez
 
-Pomen and [Povez](../Intermasq-Povez) are two domain-issuance plugins that
-differ in the data source:
+Pomen and [Povez](../Intermasq-Povez) are two domain-assignment plugins that
+differ in their data source:
 
 | | Povez | Pomen |
 |---|---|---|
 | Source | Proxmox API | VM webhook + `podman ps` |
 | Target | PVE VMs/LXC | Podman containers inside VMs |
 | Parameters | PVE tags `port-`/`proto-`/`name-` | Podman labels `port-`/`proto-`/`name-` |
-| Upstream IP | Computed `[subnet].[VMID-98]` | `IP_VM` (from registry) |
+| Upstream IP | Computed `[subnet].[VMID-98]` | `IP_VM` (from the registry) |
 | DNS in Intermasq | `dhcp-host` (DHCP reservation) | **not written** (wildcard) |
 | Caddy ID | `proxy-<VMID>-<node>` | `pod-<vm>-<name>-<node>` |
-| Trigger | MAC from leases | UI button click |
+| Trigger | MAC from leases | Administrator request |
 
-Both plugins write into the same per-node Caddy; the `@id` prefixes
-(`proxy-` vs `pod-`) ensure no conflicts.
+Both plugins write into the same per-node Caddy instance; the `@id` prefixes
+(`proxy-` and `pod-` respectively) ensure that no conflicts arise.
 
 ## API
 

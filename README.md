@@ -22,13 +22,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <h1>Pomen</h1>
 
-**Плагин для [Intermasq](../Intermasq) — выдача доменов контейнерам Podman**
+**Плагин для [Intermasq](../Intermasq) — назначение доменов контейнерам Podman**
 
-Pomen запускается как дочерний процесс панели Intermasq и по кнопке в UI
-выдаёт контейнерам Podman (запущенным через Quadlet внутри ВМ) домены вида
-`<container>.<vm>.<node>.internal` с HTTPS через Caddy. Источник данных —
-вебхук на ВМ с `podman ps`; DNS-зону Intermasq плагин не трогает, маршрутизация
-по Host-header делает Caddy. Один бинарь, ноль внешних зависимостей.
+Pomen выполняется как дочерний процесс панели Intermasq; по запросу
+администратора он назначает контейнерам Podman (запускаемым через Quadlet внутри
+виртуальных машин) доменные имена вида
+`<container>.<vm>.<node>.internal` с HTTPS через Caddy. Источником данных служит
+вебхук на виртуальной машине, выполняющий `podman ps`; DNS-зона Intermasq при
+этом не модифицируется — маршрутизация по заголовку Host выполняется Caddy.
+Поставляется в виде единственного исполняемого файла без внешних зависимостей.
 
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg?style=flat-square)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.25-00ADD8.svg?style=flat-square)](https://go.dev/)
@@ -45,7 +47,7 @@ Pomen запускается как дочерний процесс панели
 - [Краткое описание](#краткое-описание)
 - [Быстрый старт](#быстрый-старт)
 - [Конфигурация](#конфигурация)
-- [Связь с материнским приложением](#связь-с-материнским-приложением)
+- [Связь с хост-приложением](#связь-с-хост-приложением)
 - [Сравнение с Povez](#сравнение-с-povez)
 - [API](#api)
 - [Структура проекта](#структура-проекта)
@@ -60,23 +62,30 @@ Pomen запускается как дочерний процесс панели
 
 ## Краткое описание
 
-Pomen — это плагин для панели [Intermasq](../Intermasq). Он не работает в
-отрыве от хоста: материнское приложение запускает его через unix-сокет и
-проксирует на него запросы через `/plugins/pomen/*` после своей аутентификации.
+Pomen — плагин для панели [Intermasq](../Intermasq). Он не функционирует в
+отрыве от хоста: Intermasq запускает его через Unix-сокет и проксирует на него
+запросы по пути `/plugins/pomen/*` после прохождения собственной
+аутентификации.
 
-Цель — по клику в UI выдавать домены контейнерам Podman, запущенным через
-Quadlet внутри короткоживущих ВМ. Под капотом:
+Назначение — по запросу администратора выдавать доменные имена контейнерам
+Podman, запускаемым через Quadlet внутри короткоживущих виртуальных машин.
+Принцип работы:
 
-- **On-demand pull:** сети нет фонового шума. Между кликами плагин молчит;
-  по клику «Обновить» он стучит на вебхук ВМ (adnanh/webhook), тот исполняет
-  `podman ps --format json` и возвращает список контейнеров.
-- **Caddy reverse_proxy:** маршрут пишется в Admin API Caddy ноды; TLS
-  выпускается через внутренний Step-CA. DNS-зону Intermasq плагин не трогает —
-  достаточно одного wildcard `address=/.<node>.internal/<caddy-ip>` в dnsmasq.
-- **Idempotent upsert:** повторный Provision того же контейнера не плодит
-  дубль TLS-политик в Caddy (см. [docs/INTERNALS.md](docs/INTERNALS.md)).
-- **Один бинарь:** Go + Vue 3 + Bootstrap 5 в одном файле ~10 МБ. UI embed'ится
-  через `//go:embed web`, поэтому никаких внешних файлов в production не нужно.
+- **Выборочный опрос по запросу.** Фоновый сетевой трафик отсутствует: между
+  запросами администратора плагин обращений не выполняет. При нажатии кнопки
+  «Обновить» плагин направляет запрос к вебхуку виртуальной машины
+  (adnanh/webhook), который выполняет `podman ps --format json` и возвращает
+  список контейнеров.
+- **Caddy reverse_proxy.** Маршрут помещается в Admin API Caddy
+  соответствующего узла; TLS-сертификат выпускается внутренним Step-CA.
+  DNS-зона Intermasq не модифицируется — в dnsmasq достаточно одной
+  wildcard-записи `address=/.<node>.internal/<caddy-ip>`.
+- **Идемпотентное обновление (upsert).** Повторный вызов Provision для того же
+  контейнера не приводит к дублированию политики TLS в Caddy
+  (см. [docs/INTERNALS.md](docs/INTERNALS.md)).
+- **Единый исполняемый файл.** Бэкенд на Go и фронтенд на Vue 3 и Bootstrap 5
+  объединены в один файл размером около 10 МБ. Интерфейс встраивается директивой
+  `//go:embed web`, поэтому в рабочем развёртывании внешние файлы не требуются.
 
 ## Быстрый старт
 
@@ -86,41 +95,43 @@ Pomen — плагин. Подробная инструкция по устан�
 ### Требования
 
 - Go 1.25+
-- Linux (для production); Windows/macOS собираются, но unix-сокет работает
-  только на POSIX (см. `socket_unix.go` / `socket_windows.go`)
+- Linux для рабочего развёртывания; Windows и macOS поддерживают сборку, однако
+  Unix-сокет функционирует только на POSIX (см. `socket_unix.go` /
+  `socket_windows.go`).
 
 ### Сборка
 
 ```bash
-make build          # локальный бинарь ./pomen
+make build          # локальный исполняемый файл ./pomen
 make build-linux    # кросс-компиляция под linux/amd64 → ./pomen-linux
 ```
 
-### Production-режим (под Intermasq)
+### Рабочий режим (под Intermasq)
 
-Бинарь копируется в `/etc/intermasq/plugins/pomen/`, `manifest.json`
-объявляет плагин хосту. Хост передаёт `PLUGIN_SOCKET` в env и
-проксирует `/plugins/pomen/*` на сокет. См. [docs/SETUP.md](docs/SETUP.md).
+Исполняемый файл помещается в `/etc/intermasq/plugins/pomen/`; `manifest.json`
+объявляет плагин для хоста. Хост передаёт `PLUGIN_SOCKET` через переменную
+окружения и проксирует `/plugins/pomen/*` на сокет. См. [docs/SETUP.md](docs/SETUP.md).
 
-### Dev-режим (локальная разработка без Intermasq)
+### Режим разработки (локальная разработка без Intermasq)
 
 ```bash
-cp config.example.json config.json     # отредактируй под своё окружение
-POMEN_DEV_PORT=18992 ./pomen           # поднимется на TCP :18992
+cp config.example.json config.json     # отредактируйте применительно к окружению
+POMEN_DEV_PORT=18992 ./pomen           # прослушивает TCP :18992
 curl http://127.0.0.1:18992/api/version
 ```
 
-`POMEN_DEV_PORT` заменяет `:5001` fallback, который был раньше. Теперь это
-явный, отдельный режим без unix-сокета — он нужен только для локальной
-разработки и CI smoke/E2E тестов.
+`POMEN_DEV_PORT` заменяет прежний резервный порт `:5001`. Теперь это явный,
+отдельный режим без Unix-сокета; применяется только для локальной разработки и
+smoke-/E2E-тестов в CI.
 
 ## Конфигурация
 
 ### `config.json`
 
-Положите рядом с бинарем (или укажите через `CONFIG_FILE`). Шаблон — в
-[`config.example.json`](config.example.json). Все секции кроме `base_domain`
-и `nodes` можно опустить, будут применены дефолты из `core/constants.go`.
+Файл размещается рядом с исполняемым (или путь указывается через `CONFIG_FILE`).
+Шаблон — [`config.example.json`](config.example.json). Любую секцию, кроме
+`base_domain` и `nodes`, можно опустить; будут применены значения по умолчанию
+из `core/constants.go`.
 
 ```json
 {
@@ -139,46 +150,50 @@ curl http://127.0.0.1:18992/api/version
 
 | Переменная | Назначение | По умолчанию |
 |---|---|---|
-| `PLUGIN_SOCKET` | Путь unix-сокета (от хоста Intermasq) | — (обязателен в production) |
-| `POMEN_DEV_PORT` | TCP-порт для dev-режима (без сокета) | — |
+| `PLUGIN_SOCKET` | Путь Unix-сокета (задаётся хостом Intermasq) | — (обязателен в рабочем режиме) |
+| `POMEN_DEV_PORT` | TCP-порт для режима разработки (без сокета) | — |
 | `CONFIG_FILE` | Путь к config.json | `config.json` |
 | `STATE_FILE` | Путь к routes.json | `/etc/intermasq/plugins/pomen/routes.json` |
 | `VMS_FILE` | Путь к vms.json | `/etc/intermasq/plugins/pomen/vms.json` |
 
-Шаблон с описанием — в [`.env.example`](.env.example).
+Шаблон с описанием — [`.env.example`](.env.example).
 
-## Связь с материнским приложением
+## Связь с хост-приложением
 
-Pomen следует контракту плагинов Intermasq (см. `docs/func/ru/plugins.md`
-в материнском репозитории):
+Pomen следует контракту плагинов Intermasq (см. `docs/func/ru/plugins.md` в
+репозитории хоста):
 
-1. Каталог `/etc/intermasq/plugins/pomen/` содержит `manifest.json` + бинарь.
-2. Хост запускает плагин как дочерний процесс и передаёт `PLUGIN_SOCKET` в env.
-3. Плагин слушает этот unix-сокет с правами `0770`.
-4. Хост монтирует reverse-proxy на `/plugins/pomen/*` **после** своей auth.
-5. UI монтирует `<iframe src="/plugins/pomen/">` — фронтенд читает JWT из
-   `window.parent.localStorage`.
+1. Каталог `/etc/intermasq/plugins/pomen/` содержит `manifest.json` и
+   исполняемый файл.
+2. Хост запускает плагин как дочерний процесс и передаёт `PLUGIN_SOCKET` через
+   переменную окружения.
+3. Плагин прослушивает указанный Unix-сокет с правами `0770`.
+4. Хост монтирует reverse-proxy на `/plugins/pomen/*` **после** выполнения
+   собственной аутентификации.
+5. Интерфейс подключает `<iframe src="/plugins/pomen/">`; фронтенд считывает
+   JWT из `window.parent.localStorage`.
 
-Контракт не требует от плагина собственной аутентификации — это задача хоста.
-В dev-режиме (`POMEN_DEV_PORT`) плагин работает без auth и без сокета.
+Контракт не требует от плагина собственной аутентификации — это обязанность
+хоста. В режиме разработки (`POMEN_DEV_PORT`) плагин функционирует без
+аутентификации и без сокета.
 
 ## Сравнение с Povez
 
-Pomen и [Povez](../Intermasq-Povez) — два плагина выдачи доменов, различаются
-источником данных:
+Pomen и [Povez](../Intermasq-Povez) — два плагина назначения доменов,
+различающиеся источником данных:
 
 | | Povez | Pomen |
 |---|---|---|
-| Источник | Proxmox API | Вебхук ВМ + `podman ps` |
-| Объект | ВМ/LXC PVE | Контейнеры Podman внутри ВМ |
-| Параметры | Теги PVE `port-`/`proto-`/`name-` | Labels Podman `port-`/`proto-`/`name-` |
-| IP upstream | Вычисление `[subnet].[VMID-98]` | `IP_VM` (из реестра) |
-| DNS в Intermasq | `dhcp-host` (DHCP-резервация) | **не пишется** (wildcard) |
-| Caddy ID | `proxy-<VMID>-<node>` | `pod-<vm>-<name>-<node>` |
-| Trigger | По MAC из leases | По кнопке в UI |
+| Источник | Proxmox API | Вебхук виртуальной машины + `podman ps` |
+| Объект | ВМ/LXC PVE | Контейнеры Podman внутри виртуальных машин |
+| Параметры | Теги PVE `port-`/`proto-`/`name-` | Метки Podman `port-`/`proto-`/`name-` |
+| IP восходящего потока | Расчёт `[subnet].[VMID-98]` | `IP_VM` (из реестра) |
+| DNS в Intermasq | `dhcp-host` (резервация DHCP) | **не записывается** (wildcard) |
+| Идентификатор Caddy | `proxy-<VMID>-<node>` | `pod-<vm>-<name>-<node>` |
+| Инициация | По MAC из аренд | По запросу администратора |
 
-Оба плагина пишут в один и тот же Caddy per-ноды; префиксы `@id` (`proxy-` vs
-`pod-`) гарантируют отсутствие конфликтов.
+Оба плагина помещают маршруты в общий экземпляр Caddy на узел; префиксы `@id`
+(`proxy-` и `pod-` соответственно) обеспечивают отсутствие конфликтов.
 
 ## API
 
@@ -207,9 +222,9 @@ Pomen и [Povez](../Intermasq-Povez) — два плагина выдачи до
 Pomen/
 ├── main.go                     # точка входа: loadConfig + запуск сервера
 ├── socket_unix.go              # unix-сокет с umask(0o007) → права 0770
-├── socket_windows.go           # заглушка для Windows dev-сборок
+├── socket_windows.go           # заглушка для сборок под Windows (разработка)
 ├── manifest.json               # контракт Intermasq: {id,name,version,bin}
-├── config.example.json         # шаблон config.json (без prod-данных)
+├── config.example.json         # шаблон config.json (без рабочих данных)
 ├── .env.example                # шаблон env-переменных
 ├── go.mod                      # module pomen, go 1.25 (0 внешних зависимостей)
 ├── Makefile                    # build / test / lint / run цели
@@ -221,12 +236,12 @@ Pomen/
 ├── core/                       # доменный слой
 │   ├── models.go               # NodeConfig / VMConfig / ContainerInfo
 │   ├── config.go               # Config + WithDefaults()
-│   ├── constants.go            # дефолты (timeouts, header, path) + ID-форматы
+│   ├── constants.go            # значения по умолчанию (timeouts, header, path) + форматы ID
 │   ├── errors.go               # ErrBadRequest / ErrNotFound
 │   ├── jsonstore.go            # JSONStore[T] — generic load/save/mutex
 │   ├── state.go                # StateStore = JSONStore[RouteRecord] + Upsert/Remove
 │   ├── vmstore.go              # VMStore   = JSONStore[VMConfig]  + Get/Upsert/Delete
-│   ├── interfaces.go           # CaddyAPI / WebhookAPI — для mock'ов в тестах
+│   ├── interfaces.go           # CaddyAPI / WebhookAPI — для заглушек в тестах
 │   ├── caddy.go                # CaddyClient (upsertByID, Restart, Delete)
 │   ├── caddy_types.go          # CaddyRoute / CaddyTLSPolicy / CaddyIssuer ...
 │   ├── caddy_paths.go          # константы путей Caddy Admin API
@@ -234,7 +249,7 @@ Pomen/
 │   └── engine.go               # Engine — оркестрация Provision / Deprovision / Replay
 │
 ├── internal/version/           # ldflags-инжектируемая версия сборки
-├── web/                        # embed-нутые в бинарь UI-файлы
+├── web/                        # файлы интерфейса, встраиваемые в исполняемый файл
 │   ├── index.html              # Vue 3 + Bootstrap 5 (CDN)
 │   └── app.js                  # фронтенд-логика (вынесена из index.html)
 │
@@ -261,18 +276,19 @@ make test           # go test ./...
 make test-race      # + -race (конкурентность StateStore и т.п.)
 make cover          # coverage.out + summary
 make lint           # go vet + gofmt gate
-make run            # собрать и запустить в dev-режиме
+make run            # собрать и запустить в режиме разработки
 ```
 
-Полный CI прогон (см. [`.forgejo/workflows/build.yml`](.forgejo/workflows/build.yml)):
+Полный прогон CI (см. [`.forgejo/workflows/build.yml`](.forgejo/workflows/build.yml)):
 
-- **L1+L2 — Go unit** (`go test -race`)
-- **L3 — bash smoke** (поднимает `caddy-mock` + `webhook-mock` + `pomen-ci` в
-  dev-режиме, гоняет `tests/smoke.sh`)
-- **L4 — Playwright E2E** (opt-in через `run_e2e_tests=true`; один UI-mount spec)
+- **L1+L2 — модульные тесты Go** (`go test -race`)
+- **L3 — bash smoke** (запускает `caddy-mock` + `webhook-mock` + `pomen-ci` в
+  режиме разработки и выполняет `tests/smoke.sh`)
+- **L4 — Playwright E2E** (опционально через `run_e2e_tests=true`; один сценарий
+  монтирования интерфейса)
 
-Fixtures (`tests/fixtures/`) — отдельные go.mod, чтобы не засорять основной
-модуль зависимостями тестов.
+Компоненты в `tests/fixtures/` оформлены как отдельные go.mod, чтобы не вносить
+тестовые зависимости в основной модуль.
 
 ## Технологический стек
 
