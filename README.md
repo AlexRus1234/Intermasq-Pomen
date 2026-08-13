@@ -1,3 +1,6 @@
+> **Это зеркало репозитория. Оригинал находится по адресу:**
+> [https://git.alexrus1234.ru/AlexRus1234/Intermasq-Pomen](https://git.alexrus1234.ru/AlexRus1234/Intermasq-Pomen)
+
 <!--
 Pomen - plugin for Intermasq
 Copyright (C) 2026 AlexRus1234
